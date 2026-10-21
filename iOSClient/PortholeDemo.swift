@@ -179,6 +179,9 @@ extension StreamClient {
             }
         }
         active = .window(1001)
+        #if DEBUG
+        InputScript.sessionListed(self)   // -PortholeInputScript in the demo (its clock starts here)
+        #endif
     }
 
     func stopDemo() {

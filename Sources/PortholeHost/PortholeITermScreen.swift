@@ -27,7 +27,9 @@ final class PortholeITermScreen: @unchecked Sendable {
     private var nextID = 1
     private let lines = LineBuffer()
     private var failedAt: Date?
-    let palette = PortholeTermPalette.iTerm()
+    /// The colour set in use: "dark", "light", or nil (the Mac's appearance), as the watching device asked.
+    var colours: String? { didSet { if colours != oldValue { palette = PortholeTermPalette.iTerm(colours) } } }
+    private(set) var palette = PortholeTermPalette.iTerm()
 
     private final class LineBuffer: @unchecked Sendable {
         let lock = NSLock()

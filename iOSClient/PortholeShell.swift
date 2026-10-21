@@ -218,6 +218,9 @@ struct PortholeShell: View {
     // MARK: Picking
 
     private func open(_ p: PortholePick) {
+        #if DEBUG
+        print("porthole: open \(p)")
+        #endif
         pick = p
         compactPath = [p]   // the narrow layout's stack shows what was opened
         if case .session(let id) = p, let window = client.porthole.session(id)?.windowID {
@@ -251,6 +254,13 @@ struct PortholeShell: View {
         }
     }
 
+    /// What is on screen as a source: the picked session's window (shown as its window or as text), else
+    /// what streams.
+    private var onScreen: StreamSource {
+        if let id = pick.sessionID, let w = client.porthole.session(id)?.windowID { return .window(w) }
+        return client.active
+    }
+
     private func handle(_ action: PortholeHotKeys.Action) {
         let current = pick.sessionID
         switch action {
@@ -263,13 +273,15 @@ struct PortholeShell: View {
             let byOrder = n - 1 < client.porthole.sessions.count ? client.porthole.sessions[n - 1] : nil
             if let s = byNumber ?? byOrder { open(.session(s.id)) }
         case .nextWindow, .previousWindow:
-            if let id = PortholeSidebar.step(from: client.active, in: PortholeSidebar.windowOrder(client),
+            // From what is on screen: a session shown as text doesn't stream its window, so the walk starts
+            // from that session's window, not from the last window streamed (stuck on one session, 21 Oct).
+            if let id = PortholeSidebar.step(from: onScreen, in: PortholeSidebar.windowOrder(client),
                                              by: action == .nextWindow ? 1 : -1) { openWindow(id) }
         case .nextAppWindow, .previousAppWindow:
-            if let w = PortholeApps.window(after: client.active, in: client.windows, sameApp: true,
+            if let w = PortholeApps.window(after: onScreen, in: client.windows, sameApp: true,
                                            step: action == .nextAppWindow ? 1 : -1) { openWindow(w.id) }
         case .nextApp, .previousApp:
-            if let w = PortholeApps.window(after: client.active, in: PortholeSidebar.appWindows(client), sameApp: false,
+            if let w = PortholeApps.window(after: onScreen, in: PortholeSidebar.appWindows(client), sameApp: false,
                                            step: action == .nextApp ? 1 : -1) { openWindow(w.id) }
         case .back, .forward:
             let gone: (PortholeHistoryItem) -> Bool = { item in
@@ -477,6 +489,8 @@ struct PortholeSidebar: View {
     @ObservedObject private var pro = PortholePro.shared
     /// The Pro terminal theme (PortholeType); read so the sidebar redraws in it.
     @AppStorage(PortholeType.themeKey) private var tuiTheme = false
+    /// Text modes in dark or light colours (StreamClient.textColours).
+    @AppStorage(StreamClient.textColoursKey) private var textColours = "dark"
 
     var body: some View {
         let sessions = client.porthole.sessions
@@ -487,6 +501,15 @@ struct PortholeSidebar: View {
                     LazyVStack(alignment: .leading, spacing: 2) {
                         agentViewRow
                         PortholeTextSwitch(mode: sessionsMode, set: setMode)
+                        PortholeColoursSwitch(colours: textColours) { c in
+                            textColours = c
+                            // The text on screen comes again in the new colours.
+                            for id in client.porthole.terminalPanes.keys {
+                                let w = client.porthole.sessions.first { $0.terminalID == id }?.windowID
+                                let state = client.porthole.terminals[id]
+                                client.watchTerminal(id, windowID: w, fit: state.map { ($0.columns, $0.rows) })
+                            }
+                        }
                         section("Needs you", count: client.porthole.needsYou.count, color: PortholeStyle.brass,
                                 sessions.filter { $0.state == .needsYou })
                         section("Working", count: nil, color: PortholeStyle.label, sessions.filter { $0.state == .working })
@@ -973,5 +996,34 @@ enum PortholeType {
         guard tui else { return .system(size: size, weight: weight, design: mono ? .monospaced : .default) }
         let bold = weight == .semibold || weight == .bold || weight == .heavy
         return .custom(bold ? "HackNFM-Bold" : "HackNFM-Regular", size: size * 0.94)
+    }
+}
+
+/// Text colours: Dark | Light, under the sessions' switch. Dark unless picked (Jon, 21 Oct: "the Claude text
+/// colours are in day mode, how can we swap between these").
+struct PortholeColoursSwitch: View {
+    let colours: String
+    let set: (String) -> Void
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Text("Text colours").font(.system(size: 12)).foregroundStyle(PortholeStyle.muted).padding(.horizontal, 8)
+            Spacer(minLength: 4)
+            ForEach([("dark", "Dark"), ("light", "Light")], id: \.0) { value, label in
+                Button { set(value) } label: {
+                    Text(label).font(.system(size: 12, weight: .medium))
+                        .padding(.horizontal, 10).frame(height: 26)
+                        .background(colours == value ? PortholeStyle.field : Color.clear, in: RoundedRectangle(cornerRadius: 6))
+                        .foregroundStyle(colours == value ? PortholeStyle.text : PortholeStyle.muted)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(3)
+        .background(PortholeStyle.field.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(PortholeStyle.line))
+        .padding(.top, 2)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Text colours, dark or light")
     }
 }

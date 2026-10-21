@@ -150,8 +150,13 @@ public struct TerminalRequest: Codable, Sendable {
     public var fitColumns: Int?
     public var fitRows: Int?
     public var stop: Bool?
-    public init(terminalID: String, windowID: UInt32? = nil, fitColumns: Int? = nil, fitRows: Int? = nil, stop: Bool? = nil) {
+    /// Porthole: "dark" or "light", the terminal profile's colour set the screen comes in (21 Oct: Jon's text
+    /// came in day colours while his Mac was in light mode); nil follows the Mac's appearance.
+    public var colours: String?
+    public init(terminalID: String, windowID: UInt32? = nil, fitColumns: Int? = nil, fitRows: Int? = nil, stop: Bool? = nil,
+                colours: String? = nil) {
         self.terminalID = terminalID; self.windowID = windowID; self.fitColumns = fitColumns; self.fitRows = fitRows; self.stop = stop
+        self.colours = colours
     }
 }
 

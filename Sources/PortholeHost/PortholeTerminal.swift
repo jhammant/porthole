@@ -48,6 +48,11 @@ final class PortholeTerminalFeed: @unchecked Sendable {
             let id = ObjectIdentifier(connection)
             let previous = self.watches[id]
             if request.stop == true { self.end(id); self.stopIfIdle(); return }
+            // Porthole: the colour set the device asked for; a change sends every watched screen whole again.
+            if self.iterm.colours != request.colours {
+                self.iterm.colours = request.colours
+                for k in self.watches.keys { self.watches[k]?.runs = [] }
+            }
             // A device that has gone fits nothing.
             if case .cancelled = connection.state { return }
             if case .failed = connection.state { return }

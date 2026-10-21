@@ -781,9 +781,10 @@ enum InputScript {
     /// if `refusal` lets it.
     static func sessionListed(_ client: StreamClient) {
         let defaults = UserDefaults.standard
-        guard !started, defaults.bool(forKey: "PortholeLive"), let text = defaults.string(forKey: "PortholeInputScript") else { return }
+        guard !started, defaults.bool(forKey: "PortholeLive") || client.demo, let text = defaults.string(forKey: "PortholeInputScript") else { return }
         started = true
-        if let why = refusal(endpoint: client.connection?.endpoint, hostVersion: client.hostVersion) {
+        // The demo Mac has no host to post input to: its scripts always run (PortholeDemo).
+        if !client.demo, let why = refusal(endpoint: client.connection?.endpoint, hostVersion: client.hostVersion) {
             print("input script: refused: \(why)")
             return
         }

@@ -29,12 +29,13 @@ final class PortholeAgentViews: @unchecked Sendable {
             }
             let columns = min(max(request.fitColumns ?? 120, 20), 400), rows = min(max(request.fitRows ?? 40, 6), 200)
             if let view = self.views[id], view.running {
+                view.setColours(request.colours)
                 view.resize(columns: columns, rows: rows)
                 return
             }
             self.views[id]?.end()
             let server = self.server
-            let view = PortholeAgentView(columns: columns, rows: rows, queue: self.queue) { screen in
+            let view = PortholeAgentView(columns: columns, rows: rows, colours: request.colours, queue: self.queue) { screen in
                 server.send(PortholeHost.message(.terminalScreen, screen), to: connection)
             }
             self.views[id] = view
@@ -70,7 +71,7 @@ final class PortholeAgentView: TerminalDelegate, LocalProcessDelegate {
     private let send: (TerminalScreen) -> Void
     private var terminal: Terminal!
     private var process: LocalProcess!
-    private let palette = PortholeTermPalette.iTerm()
+    private var palette: PortholeTermPalette
     private var columns: Int
     private var rows: Int
     /// What the device has, row by row; nil until the first (full) screen.
@@ -79,8 +80,9 @@ final class PortholeAgentView: TerminalDelegate, LocalProcessDelegate {
     private var cursorShown = true
     private(set) var running = false
 
-    init(columns: Int, rows: Int, queue: DispatchQueue, send: @escaping (TerminalScreen) -> Void) {
+    init(columns: Int, rows: Int, colours: String?, queue: DispatchQueue, send: @escaping (TerminalScreen) -> Void) {
         self.columns = columns; self.rows = rows; self.queue = queue; self.send = send
+        self.palette = PortholeTermPalette.iTerm(colours)
         terminal = Terminal(delegate: self, options: TerminalOptions(cols: columns, rows: rows, scrollback: 0))
         process = LocalProcess(delegate: self, dispatchQueue: queue)
     }
@@ -105,6 +107,15 @@ final class PortholeAgentView: TerminalDelegate, LocalProcessDelegate {
         var size = winsize(ws_row: UInt16(rows), ws_col: UInt16(columns), ws_xpixel: 0, ws_ypixel: 0)
         if process.childfd >= 0 { _ = PseudoTerminalHelpers.setWinSize(masterPtyDescriptor: process.childfd, windowSize: &size) }
         sent = nil   // the whole screen again, at the new size
+        scheduleFlush()
+    }
+
+    /// Another colour set: the whole screen again in it.
+    func setColours(_ colours: String?) {
+        let next = PortholeTermPalette.iTerm(colours)
+        guard next.background != palette.background || next.foreground != palette.foreground else { return }
+        palette = next
+        sent = nil
         scheduleFlush()
     }
 
@@ -237,7 +248,7 @@ final class PortholeAgentView: TerminalDelegate, LocalProcessDelegate {
 
 /// The terminal's colours as Jon's iTerm draws them: its default profile's foreground, background and 16
 /// ANSI colours, then xterm's 6×6×6 cube and grey ramp for 16–255. Read once per agent view.
-struct PortholeTermPalette {
+struct PortholeTermPalette: Equatable {
     var foreground: UInt32 = 0xC7C7C7
     var background: UInt32 = 0x000000
     var ansi: [UInt32] = [0x000000, 0xC91B00, 0x00C200, 0xC7C400, 0x0225C7, 0xCA30C7, 0x00C5C7, 0xC7C7C7,
@@ -262,8 +273,9 @@ struct PortholeTermPalette {
         return v << 16 | v << 8 | v
     }
 
-    /// iTerm's default profile, or xterm's colours where it has none.
-    static func iTerm() -> PortholeTermPalette {
+    /// iTerm's default profile, or xterm's colours where it has none. `colours`: "dark" or "light" picks that
+    /// set of a profile with separate light and dark colours; nil follows the Mac's appearance, as iTerm does.
+    static func iTerm(_ colours: String? = nil) -> PortholeTermPalette {
         var p = PortholeTermPalette()
         let url = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Preferences/com.googlecode.iterm2.plist")
         guard let data = try? Data(contentsOf: url),
@@ -273,7 +285,7 @@ struct PortholeTermPalette {
         guard let profile = profiles.first(where: { $0["Guid"] as? String == guid }) ?? profiles.first else { return p }
         // A profile with separate light and dark colours (Jon's: Solarized) keeps each set under its own
         // keys, "Background Color (Dark)"; the Mac's appearance picks the set, as iTerm does.
-        let dark = UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark"
+        let dark = colours.map { $0 == "dark" } ?? (UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark")
         let suffix = profile["Use Separate Colors for Light and Dark Mode"] as? Bool == true ? (dark ? " (Dark)" : " (Light)") : ""
         func colour(_ name: String) -> UInt32? {
             guard let d = (profile[name + suffix] ?? profile[name]) as? [String: Any], let r = d["Red Component"] as? Double,

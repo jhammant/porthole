@@ -217,8 +217,13 @@ extension StreamClient {
             return
         }
         send(.watchTerminal, payload: Wire.encode(TerminalRequest(terminalID: terminalID, windowID: windowID,
-                                                                   fitColumns: fit?.columns, fitRows: fit?.rows)))
+                                                                   fitColumns: fit?.columns, fitRows: fit?.rows,
+                                                                   colours: Self.textColours)))
     }
+
+    /// Text in dark or light colours (the sidebar's Text colours; dark unless Jon picks light, 21 Oct).
+    static let textColoursKey = "Porthole.textColours"
+    static var textColours: String { UserDefaults.standard.string(forKey: textColoursKey) ?? "dark" }
 
     /// Porthole Anywhere: this device's push token and subscription, for the Mac (kind 212). Never from the demo.
     func sendPushRegistration(_ r: PushRegistration) {

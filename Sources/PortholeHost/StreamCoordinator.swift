@@ -1362,7 +1362,11 @@ package final class StreamCoordinator {
         // In regular mode, every window Porthole sized but the one about to stream goes back to its own
         // frame (WindowRestore, issue #57): another window or the Desktop picked, `.none` when the
         // last device leaves or the stream stops. A restart of the same window keeps it fitted.
-        if case .window(let next) = source { restoreFits(keeping: next) } else { restoreFits(keeping: nil) }
+        // Porthole: window to window, the windows already fitted stay fitted while a device is here, so going
+        // back to one needs no restore and no resize, and iTerm doesn't re-wrap (Jon, 21 Oct: switching
+        // should be "super quick"; he never uses the Mac and a device at once). The Desktop, tiles and `.none`
+        // (the last device left, the stream stopped) send them all home, as before.
+        if case .window = source {} else { restoreFits(keeping: nil) }
 
         var filter: SCContentFilter?     // nil only for the synthetic test pattern
         var sourceRect: CGRect? = nil    // set only when the window streams from the virtual display

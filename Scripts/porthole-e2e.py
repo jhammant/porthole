@@ -249,6 +249,21 @@ def main():
             link.send(K_WATCH_TERM, {"terminalID": "agent-view", "fitColumns": 80, "fitRows": 24})
             resized, s2, _ = agent_screen(80, 24, 8, lambda t, s: s[-1]["columns"] == 80 and s[-1]["rows"] == 24)
             check("agent view resize", resized is not None, "80×24 after 100×30" if resized else "never resized")
+            # colours: dark by default on the device; light on request, the whole screen again in it
+            def background_after(colours, want_change_from=None, timeout=10):
+                link.send(K_WATCH_TERM, {"terminalID": "agent-view", "fitColumns": 80, "fitRows": 24, "colours": colours})
+                deadline, bg = time.time() + timeout, None
+                while time.time() < deadline:
+                    with link.lock:
+                        bg = next((b.get("background") for k, b in reversed(link.got) if k == K_SCREEN and b.get("terminalID") == "agent-view"), None)
+                    if bg is not None and bg != want_change_from: break
+                    time.sleep(0.2)
+                return bg
+            first = background_after("light")
+            dark_bg = background_after("dark", want_change_from=first if first != 0x002B36 else None)
+            light_bg = background_after("light", want_change_from=dark_bg)
+            check("agent view colours", dark_bg is not None and light_bg is not None and dark_bg != light_bg,
+                  f"dark background #{dark_bg or 0:06X}, light #{light_bg or 0:06X}")
         link.send(K_WATCH_TERM, {"terminalID": "agent-view", "stop": True})
 
         # mirror: an iTerm session's screen with its own colours (iTerm's Python API), left at its own size
