@@ -1,0 +1,19 @@
+name: porthole-anywhere
+runtime: python
+port: 8080
+access: public
+hostname: anywhere.hammantlabs.com
+
+manifest_version: 2
+metadata:
+  description: "Porthole Anywhere: push notifications when a Claude Code session needs you, and the launch waitlist"
+  tags: [porthole, push]
+  owner: jon
+health:
+  path: /health
+secrets:
+  - ANYWHERE_APNS_KEY
+  - ANYWHERE_APNS_KEY_ID
+  - ANYWHERE_TEAM_ID
+volumes:
+  - /mnt/tank/apps/porthole-anywhere/data:/data

@@ -1052,7 +1052,7 @@ package final class StreamCoordinator {
             print("Desktop screen: \(catalog.displayInfos.first { $0.id == catalog.display?.displayID }?.name ?? "?") (picked \(pick.displayID))")
             if active == .desktop { await select(.desktop) }
             broadcastList()
-        case .watchTranscript, .sessionReply, .watchTerminal, .terminalInput, .activateTab:
+        case .watchTranscript, .sessionReply, .watchTerminal, .terminalInput, .activateTab, .pushRegistration:
             // Porthole: only from a device whose catalog went out (admitted, paired where pairing is
             // required): a reply types into a terminal.
             guard connections[ObjectIdentifier(connection)] != nil else { return }

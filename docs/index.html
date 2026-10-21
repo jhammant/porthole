@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Porthole: your Mac and Claude Code, anywhere</title>
+<meta name="description" content="See which Claude Code sessions need you, answer them, and use any Mac app from your iPad or iPhone. Free and open source.">
+<meta property="og:title" content="Porthole: your Mac and Claude Code, anywhere">
+<meta property="og:description" content="Every Claude Code session on your Mac, and any Mac app, on your iPad or iPhone. Free and open source.">
+<meta property="og:image" content="https://jhammant.github.io/porthole/img/ipad-session.jpg">
+<style>
+  :root { --bg: #0b0e12; --panel: #141920; --line: #232b35; --text: #e8edf2; --muted: #9aa6b2; --accent: #d97757; --green: #4cc38a; --blue: #9bb7ff; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 17px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
+  a { color: var(--blue); }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
+  header { padding: 72px 0 40px; text-align: center; }
+  .mark { font: 600 14px ui-monospace, "SF Mono", Menlo, monospace; color: var(--accent); letter-spacing: .12em; text-transform: uppercase; }
+  h1 { font-size: clamp(34px, 6vw, 58px); line-height: 1.08; margin: 14px 0 18px; letter-spacing: -.02em; }
+  .lede { color: var(--muted); font-size: clamp(17px, 2.4vw, 21px); max-width: 720px; margin: 0 auto 30px; }
+  .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .btn { display: inline-block; padding: 13px 22px; border-radius: 12px; font-weight: 600; text-decoration: none; border: 1px solid var(--line); color: var(--text); background: var(--panel); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #1a0f0a; }
+  .shots { display: grid; grid-template-columns: 2fr 2fr 1fr; gap: 16px; margin: 40px 0 70px; align-items: start; }
+  .shots img { width: 100%; border-radius: 14px; border: 1px solid var(--line); display: block; }
+  h2 { font-size: 30px; margin: 0 0 20px; letter-spacing: -.01em; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-bottom: 70px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 20px; }
+  .card h3 { margin: 0 0 8px; font-size: 18px; }
+  .card p { margin: 0; color: var(--muted); font-size: 15px; }
+  .tiers { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-bottom: 70px; }
+  .tier .price { font-size: 28px; font-weight: 700; margin: 6px 0 10px; }
+  .tier ul { margin: 0; padding-left: 18px; color: var(--muted); font-size: 15px; }
+  .tier.hl { border-color: var(--accent); }
+  form { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-top: 10px; }
+  input[type=email] { flex: 1 1 260px; max-width: 360px; padding: 13px 14px; border-radius: 12px; border: 1px solid var(--line); background: #0f1318; color: var(--text); font-size: 16px; }
+  #wl-msg { text-align: center; color: var(--muted); min-height: 1.5em; margin-top: 10px; }
+  footer { border-top: 1px solid var(--line); padding: 30px 0 50px; color: var(--muted); font-size: 14px; text-align: center; }
+  @media (max-width: 760px) { .shots { grid-template-columns: 1fr 1fr; } .shots .wide { grid-column: 1 / -1; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="mark">Porthole</div>
+    <h1>Your Mac, and every Claude Code session on it, in your hand.</h1>
+    <p class="lede">See which sessions need you, answer them, and use any Mac app from your iPad or iPhone. Free, open source, and private: your devices talk to your Mac directly.</p>
+    <div class="cta">
+      <a class="btn primary" href="https://apps.apple.com/app/id6823819951">Get it for iPad and iPhone</a>
+      <a class="btn" href="https://github.com/jhammant/porthole/releases">Porthole for Mac</a>
+      <a class="btn" href="https://github.com/jhammant/porthole">Source on GitHub</a>
+    </div>
+  </header>
+
+  <div class="shots">
+    <img class="wide" src="img/ipad-session.jpg" alt="Porthole on iPad: the Claude Code sessions in a sidebar beside a session's terminal window">
+    <img class="wide" src="img/ipad-text-agents.jpg" alt="A session as text with Claude Code's agent view beside it">
+    <img src="img/iphone-agent.jpg" alt="Claude Code's agent view on iPhone">
+  </div>
+
+  <h2>Made for coding agents</h2>
+  <div class="grid">
+    <div class="card"><h3>Sessions that need you, first</h3><p>Every Claude Code session on your Mac in a sidebar, the ones waiting on you at the top.</p></div>
+    <div class="card"><h3>Window or text</h3><p>Open a session's terminal window, or read it as crisp text in its own colours, even on a slow link.</p></div>
+    <div class="card"><h3>The agent view</h3><p>Claude Code's own agent view beside your sessions, one tap away.</p></div>
+    <div class="card"><h3>Any Mac app</h3><p>Any window, Chrome's tabs, a whole screen of any display, two or four windows tiled.</p></div>
+    <div class="card"><h3>Feels like a Mac</h3><p>Touch, trackpad, Pencil and keyboards, Mac shortcuts, gestures, copy and paste, pinch to zoom.</p></div>
+    <div class="card"><h3>iPhone Duo as a tiny laptop</h3><p>Folded, the Mac on top and a full keyboard and trackpad below. Or a folding keyboard and mouse.</p></div>
+  </div>
+
+  <h2>Free, with two extras</h2>
+  <div class="tiers">
+    <div class="card tier"><h3>Porthole</h3><div class="price">Free</div>
+      <ul><li>Everything above</li><li>Your home network, or your own Tailscale or VPN</li><li>Open source, Apache 2.0</li></ul></div>
+    <div class="card tier"><h3>Porthole Pro</h3><div class="price">£14.99 once</div>
+      <ul><li>The terminal theme: Porthole itself as a terminal UI</li><li>New power features as they ship</li><li>Keeps Porthole free for everyone</li></ul></div>
+    <div class="card tier hl"><h3>Porthole Anywhere</h3><div class="price">£2.99 / month</div>
+      <ul><li>A notification the moment a Claude session needs you</li><li>Even with Porthole closed, wherever you are</li><li>£24.99 a year</li></ul></div>
+  </div>
+
+  <div class="card" style="text-align:center; margin-bottom: 70px;">
+    <h2 style="margin-bottom:8px">Hear what's next</h2>
+    <p style="color:var(--muted); margin:0">One email when Porthole Anywhere's away-from-home relay and new Pro features land. Nothing else.</p>
+    <form id="wl"><input type="email" id="wl-email" required placeholder="you@example.com" aria-label="Email address"><button class="btn primary" type="submit">Keep me posted</button></form>
+    <div id="wl-msg" role="status"></div>
+  </div>
+</div>
+<footer>
+  <div class="wrap">Porthole · <a href="https://github.com/jhammant/porthole">GitHub</a> · <a href="https://github.com/jhammant/porthole/blob/main/PRIVACY.md">Privacy</a> · <a href="https://github.com/jhammant/porthole/issues">Support</a> · Apache 2.0</div>
+</footer>
+<script>
+  const form = document.getElementById("wl"), msg = document.getElementById("wl-msg");
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    msg.textContent = "Sending…";
+    try {
+      const r = await fetch("https://anywhere.hammantlabs.com/v1/waitlist", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: document.getElementById("wl-email").value }) });
+      const j = await r.json().catch(() => ({}));
+      msg.textContent = r.ok ? "You're on the list. Thank you." : (j.error || "That didn't go through. Try again?");
+      if (r.ok) form.reset();
+    } catch { msg.textContent = "That didn't go through. Try again?"; }
+  });
+</script>
+</body>
+</html>

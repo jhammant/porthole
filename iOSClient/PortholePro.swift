@@ -31,6 +31,7 @@ final class PortholePro: ObservableObject {
         unlocked = Self.storeBuild ? UserDefaults.standard.bool(forKey: Self.cacheKey) : true
         #if DEBUG
         if UserDefaults.standard.object(forKey: "PortholePro") != nil { unlocked = UserDefaults.standard.bool(forKey: "PortholePro") }
+        paywallShown = UserDefaults.standard.bool(forKey: "PortholePaywall")   // -PortholePaywall 1: the sheet at launch
         #endif
         guard Self.storeBuild else { return }
         updates = Task { [weak self] in
@@ -90,6 +91,7 @@ final class PortholePro: ObservableObject {
 /// What Pro gives, the price, Buy and Restore.
 struct PortholeProSheet: View {
     @ObservedObject var pro = PortholePro.shared
+    @ObservedObject var anywhere = PortholeAnywhere.shared
     @Environment(\.dismiss) private var dismiss
 
     static let features: [(String, String, String)] = [
@@ -125,6 +127,33 @@ struct PortholeProSheet: View {
                         Button("Restore purchase") { Task { await pro.restore() } }.disabled(pro.busy)
                     }
                     if let m = pro.message { Text(m).font(.system(size: 14)).foregroundStyle(.secondary) }
+
+                    Divider().padding(.vertical, 6)
+                    Text("Porthole Anywhere").font(.system(size: 24, weight: .bold))
+                    HStack(alignment: .top, spacing: 14) {
+                        Image(systemName: "bell.badge").font(.system(size: 20)).frame(width: 28).foregroundStyle(Palette.accent)
+                        Text("A notification when a Claude session on your Mac needs you, wherever you are, even with Porthole closed.")
+                            .font(.system(size: 14)).foregroundStyle(.secondary)
+                    }
+                    if anywhere.subscribed {
+                        Label("Anywhere is on", systemImage: "checkmark.seal.fill").font(.system(size: 17, weight: .semibold)).foregroundStyle(.green)
+                        Button("Send a test notification") { Task { await anywhere.sendTest() } }.disabled(anywhere.busy)
+                    } else {
+                        ForEach(anywhere.products, id: \.id) { product in
+                            Button { Task { await anywhere.buy(product) } } label: {
+                                Text("\(product.displayName) · \(product.displayPrice)\(product.subscription.map { " a " + ($0.subscriptionPeriod.unit == .year ? "year" : "month") } ?? "")")
+                                    .font(.system(size: 16, weight: .semibold)).frame(maxWidth: .infinity, minHeight: 46)
+                            }
+                            .buttonStyle(.bordered).disabled(anywhere.busy)
+                        }
+                        if anywhere.products.isEmpty {
+                            Text("Subscriptions come from the App Store; this build has none to offer.").font(.system(size: 13)).foregroundStyle(.secondary)
+                        }
+                        Button("Restore subscription") { Task { await anywhere.restore() } }.disabled(anywhere.busy)
+                    }
+                    if let m = anywhere.message { Text(m).font(.system(size: 14)).foregroundStyle(.secondary) }
+                    Text("Subscriptions renew until cancelled in Settings › Apple ID › Subscriptions. [Privacy](https://github.com/jhammant/porthole/blob/main/PRIVACY.md) · [Terms](https://www.apple.com/legal/internet-services/itunes/dev/stdeula/)")
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
                 }
                 .padding(24)
             }

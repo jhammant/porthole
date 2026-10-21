@@ -11,6 +11,20 @@ import UIKit
 /// nothing says which window's session the bar's choices would reach), or when the window's session
 /// has no menus.
 final class PortholeAppDelegate: UIResponder, UIApplicationDelegate {
+    // Porthole Anywhere (PortholeAnywhere): notifications set up at launch, the push token handed over.
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        PortholeAnywhere.shared.start()
+        return true
+    }
+
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        PortholeAnywhere.shared.didRegister(deviceToken)
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        print("anywhere: no push token: \(error.localizedDescription)")
+    }
+
     override func buildMenu(with builder: UIMenuBuilder) {
         super.buildMenu(with: builder)
         guard builder.system == .main else { return }

@@ -220,6 +220,12 @@ extension StreamClient {
                                                                    fitColumns: fit?.columns, fitRows: fit?.rows)))
     }
 
+    /// Porthole Anywhere: this device's push token and subscription, for the Mac (kind 212). Never from the demo.
+    func sendPushRegistration(_ r: PushRegistration) {
+        guard connected, !demo else { return }
+        send(.pushRegistration, payload: Wire.encode(r))
+    }
+
     /// Porthole: the Desktop streams this screen from now on (kind 211), and comes on screen if it wasn't.
     func pickDisplay(_ id: UInt32) {
         send(.pickDisplay, payload: Wire.encode(PickDisplay(displayID: id)))

@@ -10,6 +10,7 @@ struct PortholeShell: View {
     @ObservedObject var client: StreamClient
     @ObservedObject private var matrix = PortholeMatrix.shared
     @ObservedObject private var pro = PortholePro.shared
+    @ObservedObject private var anywhere = PortholeAnywhere.shared
     @State private var pick: PortholePick = .apps
     @State private var sidebarShown = true
     @State private var switcherShown = false
@@ -71,7 +72,15 @@ struct PortholeShell: View {
         .sheet(isPresented: $tilePickerShown) {
             PortholeTilePicker(client: client, shown: $tilePickerShown) { ids in client.select(.tiles(ids)); open(.apps) }
         }
-        .onAppear { PortholeHotKeys.handler = { action in handle(action) } }
+        .onAppear {
+            PortholeHotKeys.handler = { action in handle(action) }
+            // Porthole Anywhere: a tapped notification opens its session; the Mac gets this device's token.
+            anywhere.openSession = { id in if client.porthole.session(id) != nil { open(.session(id)) } }
+            if let id = anywhere.takePendingSession() { anywhere.openSession?(id) }
+            if let r = anywhere.registration { client.sendPushRegistration(r) }
+        }
+        .onChange(of: anywhere.registration) { _, r in if let r { client.sendPushRegistration(r) } }
+        .onChange(of: client.connected) { _, up in if up, let r = anywhere.registration { client.sendPushRegistration(r) } }
         #if DEBUG
         // -PortholeOpen needs|first: open a session's window once the list arrives, for the simulator
         // runs (docs/porthole-plan.md, Judges) that have no hand to tap with.

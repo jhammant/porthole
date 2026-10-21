@@ -19,6 +19,8 @@ final class PortholeHost: @unchecked Sendable {
     private let terminals: PortholeTerminalFeed
     /// Claude Code's agent view as text (docs/agent-view-plan.md): the terminal id `agent-view`.
     private let agentViews: PortholeAgentViews
+    /// Porthole Anywhere: push notifications when a session needs you (PortholeAnywhereHost).
+    private let anywhere = PortholeAnywhereHost()
     /// Chrome's tabs (kinds 208, 209), read through a helper of their own so a slow Chrome never holds up
     /// a terminal; every other tick (4 s).
     private let browserOSA = PortholeOSA()
@@ -87,6 +89,7 @@ final class PortholeHost: @unchecked Sendable {
         }
         terminals.clientLeft(connection)
         agentViews.clientLeft(connection)
+        anywhere.clientLeft(connection)
     }
 
     /// A Porthole message from an admitted device (the coordinator checks that first).
@@ -102,6 +105,9 @@ final class PortholeHost: @unchecked Sendable {
             guard let request = Wire.decode(TerminalRequest.self, from: message.payload) else { return }
             if request.terminalID == PortholeAgentViews.terminalID { agentViews.watch(request, from: connection) }
             else { terminals.watch(request, from: connection) }
+            return
+        case .pushRegistration:
+            if let r = Wire.decode(PushRegistration.self, from: message.payload) { anywhere.register(r, from: connection) }
             return
         case .terminalInput:
             guard let input = Wire.decode(TerminalInput.self, from: message.payload) else { return }

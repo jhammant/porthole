@@ -90,6 +90,7 @@ public enum StreamMessageKind: UInt8 {
     case activateTab = 209      // device → host: JSON ActivateTab
     case portholeNotice = 210   // host → device: JSON PortholeNotice, e.g. screen capture refused, and its clearing
     case pickDisplay = 211      // device → host: JSON PickDisplay, the screen the Desktop streams
+    case pushRegistration = 212 // device → host: JSON PushRegistration, Porthole Anywhere's device token
     case unknown = 255       // never sent: what parseHeader yields for a kind this build does not know
 }
 

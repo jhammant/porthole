@@ -92,6 +92,18 @@ public struct DisplayInfo: Codable, Hashable, Identifiable {
     }
 }
 
+/// Device → host (kind 212): Porthole Anywhere. The device's push token and its subscription (StoreKit 2's
+/// signed transaction), so the Mac can ask anywhere.hammantlabs.com to tell it when a session needs it.
+public struct PushRegistration: Codable, Equatable {
+    public var token: String          // the APNs device token, hex
+    public var env: String            // "production" or "sandbox"
+    public var jws: String            // the Anywhere subscription's signed transaction
+    public var name: String           // the device's name, for the Mac's Settings
+    public init(token: String, env: String, jws: String, name: String) {
+        self.token = token; self.env = env; self.jws = jws; self.name = name
+    }
+}
+
 /// Device → host (kind 211): the screen the Desktop streams from now on.
 public struct PickDisplay: Codable {
     public var displayID: UInt32
