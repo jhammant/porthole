@@ -1,0 +1,10 @@
+Porthole
+Copyright 2026 Jon Hammant
+
+Porthole is derived from Sill (https://github.com/Saffsanity/sill), which is
+licensed under the Apache License, Version 2.0 (see LICENSE), Copyright 2026 Noah Saffer.
+The files taken from it have been modified: renamed throughout, with features added and removed.
+
+The iPad app bundles Hack Nerd Font Mono (Regular and Bold) from Nerd Fonts
+(https://github.com/ryanoasis/nerd-fonts), Hack under the MIT and Bitstream Vera licences and the
+patched glyphs under their own; the licence is in docs/HackNerdFont-LICENSE.md.

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<!-- Porthole's icon (docs/porthole-plan.md): a brass porthole, a terminal prompt in the dark glass. -->
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#16263A"/><stop offset="1" stop-color="#0A121C"/></linearGradient>
+<linearGradient id="brass" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#F6C46A"/><stop offset="0.5" stop-color="#D9952E"/><stop offset="1" stop-color="#9A6214"/></linearGradient>
+<radialGradient id="glass" cx="0.42" cy="0.38" r="0.75"><stop offset="0" stop-color="#1C3550"/><stop offset="1" stop-color="#070D14"/></radialGradient>
+<linearGradient id="shine" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FFFFFF" stop-opacity="0.22"/><stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0"/></linearGradient>
+</defs>
+<rect width="1024" height="1024" fill="url(#bg)"/>
+<circle cx="512" cy="512" r="368" fill="url(#brass)"/>
+<circle cx="512" cy="512" r="368" fill="none" stroke="#6E4510" stroke-width="6" opacity="0.6"/>
+<circle cx="512" cy="512" r="292" fill="#5A390C"/>
+<circle cx="512" cy="512" r="280" fill="url(#glass)"/>
+<g fill="#7A4D12">
+<circle cx="512" cy="182" r="18"/><circle cx="512" cy="842" r="18"/><circle cx="182" cy="512" r="18"/><circle cx="842" cy="512" r="18"/>
+<circle cx="279" cy="279" r="18"/><circle cx="745" cy="279" r="18"/><circle cx="279" cy="745" r="18"/><circle cx="745" cy="745" r="18"/>
+</g>
+<g fill="#FFE2A8" opacity="0.55">
+<circle cx="506" cy="176" r="6"/><circle cx="506" cy="836" r="6"/><circle cx="176" cy="506" r="6"/><circle cx="836" cy="506" r="6"/>
+<circle cx="273" cy="273" r="6"/><circle cx="739" cy="273" r="6"/><circle cx="273" cy="739" r="6"/><circle cx="739" cy="739" r="6"/>
+</g>
+<path d="M392 432 L492 512 L392 592" fill="none" stroke="#E8A33D" stroke-width="44" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="532" y="566" width="132" height="40" rx="20" fill="#E6EDF3"/>
+<path d="M300 380 A 230 230 0 0 1 560 268" fill="none" stroke="url(#shine)" stroke-width="40" stroke-linecap="round"/>
+</svg>
