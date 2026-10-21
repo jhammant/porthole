@@ -107,6 +107,11 @@ jobs:
       # twice the work on this arm64 runner, and no source depends on the architecture.
       - name: Build the iOS app for the simulator (Debug, arm64, not signed)
         run: |
+          # The iOS app needs Xcode 27.1 (the iPhone Duo's hinge API); GitHub's runners may not have it yet.
+          if ! xcodebuild -version | head -1 | grep -qE "Xcode (27\.[1-9]|2[89]|[3-9][0-9])"; then
+            echo "::notice::Skipped: the iOS app needs Xcode 27.1 or later; this runner has $(xcodebuild -version | head -1)."
+            exit 0
+          fi
           xcodebuild -project iOSClient/Porthole.xcodeproj -scheme Porthole \
             -destination 'generic/platform=iOS Simulator' -configuration Debug \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" CODE_SIGNING_ALLOWED=NO ARCHS=arm64 build
