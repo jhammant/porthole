@@ -4,7 +4,7 @@ import StreamProtocol
 /// Porthole (docs/porthole-plan.md, iPad side): the connected screen. At a regular width (an iPad, the
 /// iPhone Duo open), a sidebar of Claude Code sessions and Mac apps beside the Mac's own picture: a
 /// session opens its iTerm window, an app its window, each fitted to the panel and looking exactly as it
-/// does on the Mac. The divider drags; on the Duo open flat the fold is the divider. At a compact width
+/// does on the Mac. The divider drags; on the Duo half-folded as a book the fold is the divider. At a compact width
 /// (an iPhone, the Duo's cover) the sidebar comes first and a pick opens its window, with Back.
 struct PortholeShell: View {
     @ObservedObject var client: StreamClient
@@ -52,7 +52,7 @@ struct PortholeShell: View {
                         }
                         divider(geo.size, posture).zIndex(1)
                         detail
-                            // Over the content, not the sidebar: on the Duo open flat, the right half.
+                            // Over the content, not the sidebar: on the Duo as a book, the right half.
                             .overlay { if switcherShown { PortholeSwitcher(client: client, shown: $switcherShown, open: open) } }
                     }
                 }
@@ -108,9 +108,10 @@ struct PortholeShell: View {
         .background(PortholeKeyCommands())
     }
 
-    /// On the Duo open flat or as a book the fold is the divider: each half about a phone's width.
+    /// On the Duo as a book the fold is the divider: each half about a phone's width. Open flat the
+    /// sidebar is the usual one, so the Mac can have the whole display (PortholeDuoMode).
     static func foldDivides(_ size: CGSize, _ posture: DuoPosture) -> Bool {
-        posture.pose(size) == .flatLandscape || posture.pose(size) == .book
+        PortholeDuoMode.foldDivides(posture.pose(size))
     }
 
     static func clampedWidth(_ width: Double, in total: CGFloat) -> Double {

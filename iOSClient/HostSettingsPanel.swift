@@ -51,6 +51,12 @@ struct HostSettingsPanel: View {
     /// This device's switch for the clipboard (docs/clipboard-plan.md): on unless turned off, read by
     /// StreamClient+Clipboard at each decision; a change subscribes or stops at once.
     @AppStorage(StreamClient.clipboardKey) private var clipboardOn = true
+    /// Porthole: the iPhone Duo held upright, half-folded and open flat: the laptop or the whole screen
+    /// (PortholeDuoMode), and the laptop's keys with a trackpad strip or alone. Only with a hinge.
+    @Environment(\.duoEnvironment) private var duoEnvironment
+    @AppStorage(PortholeDuoMode.halfFoldedKey) private var duoHalfFolded = PortholeDuoMode.halfFoldedDefault
+    @AppStorage(PortholeDuoMode.flatKey) private var duoFlat = PortholeDuoMode.flatDefault
+    @AppStorage("Porthole.laptopDeck") private var laptopDeck: PortholeLaptopKeyboard.Deck = .keyboardAndTrackpad
     /// VoiceOver is on: it keeps three-finger swipes and taps for itself, so the This iPad group says
     /// its rows do the gestures instead.
     @State private var voiceOver = HostSettingsPanel.voiceOverRunning
@@ -477,6 +483,7 @@ struct HostSettingsPanel: View {
             .padding(.bottom, 6)
             .accessibilityAddTraits(.isHeader)
             .id(Self.gesturesGroupID)
+        if duoEnvironment.hinge != .unknown { duoRows }
         if offersLargerPicture {
             Rows {
                 Toggle(isOn: $largerPicture) {
@@ -522,6 +529,39 @@ struct HostSettingsPanel: View {
         }
         Footnote(text: gesturesFooter)
     }
+
+    /// Porthole: the Duo's two ways to show the Mac, for each pose held upright, and the laptop's keys.
+    @ViewBuilder private var duoRows: some View {
+        Rows {
+            AdaptiveRow(title: "Half-Folded", since: nil) {
+                Picker("Half-Folded", selection: $duoHalfFolded) {
+                    ForEach(PortholeDuoMode.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+            }
+            RowDivider()
+            AdaptiveRow(title: "Open Flat", since: nil) {
+                Picker("Open Flat", selection: $duoFlat) {
+                    ForEach(PortholeDuoMode.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+            }
+            RowDivider()
+            AdaptiveRow(title: "Laptop Keys", since: nil) {
+                Picker("Laptop Keys", selection: $laptopDeck) {
+                    Text("With Trackpad").tag(PortholeLaptopKeyboard.Deck.keyboardAndTrackpad)
+                    Text("Keys Only").tag(PortholeLaptopKeyboard.Deck.keyboardOnly)
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+            }
+        }
+        Footnote(text: Self.duoFooter)
+    }
+
+    static let duoFooter = "Held upright. Laptop: the Mac above the fold and its keyboard below, like a tiny laptop. Whole Screen: the Mac fills the display; tap Keyboard to type. With a keyboard connected, the Mac fills the display either way. Sideways and open flat, drag the sidebar narrower or hide it and the Mac has the whole display."
 
     /// The Mac's window list said it takes the gestures (`WindowList.gestures`).
     private var macTakesGestures: Bool { (client.hostGestures ?? 0) >= TrackpadGesture.generation }

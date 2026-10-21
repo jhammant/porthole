@@ -145,6 +145,9 @@ struct StreamScreen: View {
     @State private var desktopZoom: PortholeZoom = .none
     /// Porthole: the top bar hidden (Jon, 20 Oct: "be able to hide the top controls"); ⌃⌥B or its tab.
     @AppStorage(PortholeShell.topBarHiddenKey) private var topBarHidden = false
+    /// Porthole: the Duo upright, half-folded and open flat: the laptop or the whole screen (PortholeDuoMode).
+    @AppStorage(PortholeDuoMode.halfFoldedKey) private var duoHalfFolded = PortholeDuoMode.halfFoldedDefault
+    @AppStorage(PortholeDuoMode.flatKey) private var duoFlat = PortholeDuoMode.flatDefault
     /// The viewport send waiting out its debounce, if any.
     @State private var pendingViewport: Task<Void, Never>? = nil
     /// The line over the stream while the link cannot carry the quality (docs/remote-bundle-plan.md
@@ -222,10 +225,13 @@ struct StreamScreen: View {
         // behind each one.
         GeometryReader { geo in
             let duo = DuoLayout.of(geo.size)
-            let layout: TourLayout = duo == .innerLandscape || duo == .outerLandscape ? .landscape
-                : (DuoLayout.drawsPhone(geo.size) ? .phone : .portrait)
             // The fold across this screen, in its own space (iOS 27.1 on the Duo; else as before).
             let posture = DuoPosture.read(geo, duoEnvironment)
+            // Porthole: the Duo upright as the whole screen (open flat, by default) draws the sideways layout.
+            let wholeScreen = duo == .innerPortrait
+                && PortholeDuoMode.wholeScreen(posture.pose(geo.size), halfFolded: duoHalfFolded, flat: duoFlat)
+            let layout: TourLayout = duo == .innerLandscape || duo == .outerLandscape || wholeScreen ? .landscape
+                : (DuoLayout.drawsPhone(geo.size) ? .phone : .portrait)
             // Larger Picture on a phone held upright: the software keyboard its rows are kept above;
             // none with the switch off, while the Desktop or nothing streams (`largerPictureNow`),
             // sideways, on an iPad, on the iPhone Duo (a hinge), and where the picture would be no
@@ -247,7 +253,11 @@ struct StreamScreen: View {
                     case .outerLandscape:
                         landscape(bar: .compact, width: geo.size.width, fold: posture.info(in: geo.size))
                     case .innerPortrait:
-                        portrait(metrics: .regular)
+                        if wholeScreen {
+                            landscape(bar: .regular, width: geo.size.width, fold: posture.info(in: geo.size))
+                        } else {
+                            portrait(metrics: .regular)
+                        }
                     case .outerPortrait:
                         portrait(metrics: DuoLayout.phoneArrangement ? .phone : .compact, largerKeyboard: largerKeyboard)
                     }
@@ -257,7 +267,7 @@ struct StreamScreen: View {
                 .allowsHitTesting(!overlayShown && tour == nil)
                 // The pointer sprite follows the layout: the trackpad's arrow shows only in the
                 // laptop layout, and a rotation re-renders it at once; the Mac's arrow stays.
-                .onChange(of: DuoLayout.of(geo.size).isPortrait, initial: true) { _, portrait in
+                .onChange(of: duo.isPortrait && !wholeScreen, initial: true) { _, portrait in
                     client.setPointerLayout(portrait: portrait)
                 }
                 // The clipboard's chip on screen or not: its 20 s run only while it is, and VoiceOver
