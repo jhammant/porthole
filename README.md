@@ -23,8 +23,9 @@ Two apps:
   trackpad gestures, pinch to zoom the desktop, and copy and paste both ways.
 - **Hot keys** for everything: next and previous window, back and forward, sessions, apps, the sidebar
   and the top bar (hold ⌘ to see them all).
-- **iPhone Duo**: every pose, including folded like a tiny laptop with a full Mac keyboard and trackpad on
-  the lower half, or with a folding keyboard and mouse.
+- **iPhone Duo**: every pose. Half-folded it is a tiny laptop, with a full Mac keyboard and trackpad on the
+  lower half; open flat the Mac fills the whole screen (each pose's choice is in Settings). Or use a folding
+  keyboard and mouse.
 - **At home or away**: found on your network with Bonjour; away from home through Tailscale or any VPN,
   with the quality following the link.
 - **Private by design**: your devices talk to your Mac directly over an encrypted, paired connection.
