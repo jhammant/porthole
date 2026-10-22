@@ -8,6 +8,7 @@ import StreamProtocol
 /// Python) answers one request per line: `{"id", "session"}` in, the screen as styled runs out. iTerm lets
 /// it in with a cookie it hands out over AppleScript, which Porthole may already use. Without the
 /// environment, `screen` is nil and the mirror stays text, as before. Safe from any queue (one call at a time).
+/// Porthole (22 Oct): it also reads the session's history (two-finger scroll), finds words in it, and types.
 final class PortholeITermScreen: @unchecked Sendable {
     struct Screen {
         var columns: Int
@@ -15,6 +16,12 @@ final class PortholeITermScreen: @unchecked Sendable {
         var cursorX: Int
         var cursorY: Int
         var lines: [[TerminalRun]]
+        /// Porthole: the session's line number of the first line here, of the live screen's first line, and
+        /// the lines of history above the live screen (iTerm's numbering, which counts lines it dropped).
+        var first = 0
+        var base = 0
+        var history = 0
+        var scrolledUp: Int { max(0, base - first) }
     }
 
     static let folder = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Application Support/Porthole")
@@ -55,7 +62,29 @@ final class PortholeITermScreen: @unchecked Sendable {
     }
 
     /// The session's screen, or nil (no helper, iTerm said no, too slow): the caller reads text instead.
-    func screen(_ terminalID: String, timeout: TimeInterval = 2) -> Screen? {
+    /// Porthole: from line `first` of its history (iTerm's line number), or `scrolledUp` lines above the live
+    /// screen; the live screen without either, or once they reach it.
+    func screen(_ terminalID: String, first: Int? = nil, scrolledUp: Int? = nil, timeout: TimeInterval = 2) -> Screen? {
+        var request: [String: Any] = ["session": terminalID]
+        if let scrolledUp, scrolledUp > 0 { request["scroll"] = scrolledUp } else if let first { request["first"] = first }
+        return call(request, timeout: timeout).flatMap(parse)
+    }
+
+    /// Porthole: every place the words are in the session's history and screen, ignoring case (line number,
+    /// column), oldest first, and the live screen's first line number.
+    func find(_ terminalID: String, _ query: String) -> (matches: [(line: Int, column: Int)], base: Int)? {
+        guard let a = call(["session": terminalID, "find": query], timeout: 4), a["ok"] as? Bool == true,
+              let raw = a["matches"] as? [[Int]] else { return nil }
+        return (raw.compactMap { $0.count == 2 ? ($0[0], $0[1]) : nil }, a["base"] as? Int ?? 0)
+    }
+
+    /// Porthole: types into the session through iTerm's API (a few ms; AppleScript's write took ~50).
+    /// False when the helper isn't there or iTerm said no: the caller types through AppleScript.
+    func type(_ text: String, into terminalID: String) -> Bool {
+        call(["session": terminalID, "type": text], timeout: 1)?["ok"] as? Bool == true
+    }
+
+    private func call(_ request: [String: Any], timeout: TimeInterval) -> [String: Any]? {
         lock.lock(); defer { lock.unlock() }
         let started = process?.isRunning != true
         guard ensureRunning(), let input else { return nil }
@@ -64,7 +93,9 @@ final class PortholeITermScreen: @unchecked Sendable {
         let timeout = started ? max(timeout, 10) : timeout
         let id = nextID
         nextID += 1
-        guard let body = try? JSONSerialization.data(withJSONObject: ["id": id, "session": terminalID]) else { return nil }
+        var request = request
+        request["id"] = id
+        guard let body = try? JSONSerialization.data(withJSONObject: request) else { return nil }
         do { try input.write(contentsOf: body + Data([0x0A])) } catch { stop(); return nil }
         let deadline = Date().addingTimeInterval(timeout)
         while true {
@@ -76,7 +107,7 @@ final class PortholeITermScreen: @unchecked Sendable {
             }
             guard let line = lines.next(), let answer = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
                   answer["id"] as? Int == id else { continue }
-            return parse(answer)
+            return answer
         }
     }
 
@@ -99,7 +130,8 @@ final class PortholeITermScreen: @unchecked Sendable {
                 return TerminalRun(text: text, fg: rgb(r[1]), bg: rgb(r[2]), style: style == 0 ? nil : style)
             }
         }
-        return Screen(columns: columns, rows: rows, cursorX: a["cx"] as? Int ?? -1, cursorY: a["cy"] as? Int ?? -1, lines: lines)
+        return Screen(columns: columns, rows: rows, cursorX: a["cx"] as? Int ?? -1, cursorY: a["cy"] as? Int ?? -1, lines: lines,
+                      first: a["first"] as? Int ?? 0, base: a["base"] as? Int ?? 0, history: a["history"] as? Int ?? 0)
     }
 
     private func ensureRunning() -> Bool {
@@ -156,46 +188,89 @@ def colour(c, reversed_default):
         return reversed_default
     return None
 
-async def screen(app, uid):
-    s = app.get_session_by_id(uid)
+def styled(line, cols):
+    runs, key, text = [], None, ""
+    for x in range(cols):
+        st = line.style_at(x)
+        try:
+            ch = line.string_at(x)
+        except Exception:
+            ch = " "
+        if ch == "" and x > 0 and st is not None:
+            continue  # the second cell of a wide character
+        if ch == "":
+            ch = " "
+        if st is None:
+            k = (None, None, 0)
+        else:
+            f = (1 if st.bold else 0) | (2 if st.italic else 0) | (4 if st.underline else 0) \
+                | (8 if st.inverse else 0) | (16 if st.faint else 0) | (32 if st.strikethrough else 0)
+            k = (colour(st.fg_color, "bg"), colour(st.bg_color, "fg"), f)
+        if k == key:
+            text += ch
+        else:
+            if key is not None and text:
+                runs.append([text, key[0], key[1], key[2]])
+            key, text = k, ch
+    if key is not None and text:
+        if key == (None, None, 0):
+            text = text.rstrip(" ")
+        if text:
+            runs.append([text, key[0], key[1], key[2]])
+    return runs
+
+async def screen(connection, app, req):
+    s = app.get_session_by_id(req["session"])
     if s is None:
         return {"ok": False, "why": "no such session"}
-    sc = await s.async_get_screen_contents()
     cols, rows = s.grid_size.width, s.grid_size.height
-    out = []
-    for i in range(min(sc.number_of_lines, rows)):
-        line = sc.line(i)
-        runs, key, text = [], None, ""
-        for x in range(cols):
-            st = line.style_at(x)
-            try:
-                ch = line.string_at(x)
-            except Exception:
-                ch = " "
-            if ch == "" and x > 0 and st is not None:
-                continue  # the second cell of a wide character
-            if ch == "":
-                ch = " "
-            if st is None:
-                k = (None, None, 0)
-            else:
-                f = (1 if st.bold else 0) | (2 if st.italic else 0) | (4 if st.underline else 0) \
-                    | (8 if st.inverse else 0) | (16 if st.faint else 0) | (32 if st.strikethrough else 0)
-                k = (colour(st.fg_color, "bg"), colour(st.bg_color, "fg"), f)
-            if k == key:
-                text += ch
-            else:
-                if key is not None and text:
-                    runs.append([text, key[0], key[1], key[2]])
-                key, text = k, ch
-        if key is not None and text:
-            if key == (None, None, 0):
-                text = text.rstrip(" ")
-            if text:
-                runs.append([text, key[0], key[1], key[2]])
-        out.append(runs)
-    c = sc.cursor_coord
-    return {"ok": True, "cols": cols, "rows": rows, "cx": c.x, "cy": c.y - sc.number_of_lines_above_screen, "lines": out}
+    async with iterm2.Transaction(connection):
+        li = await s.async_get_line_info()
+        base = li.overflow + li.scrollback_buffer_height
+        first = None
+        if req.get("scroll"):
+            first = base - int(req["scroll"])
+        elif req.get("first") is not None:
+            first = int(req["first"])
+        if first is not None:
+            first = max(li.overflow, min(first, base))
+        if first is None or first >= base:
+            sc = await s.async_get_screen_contents()
+            lines = [sc.line(i) for i in range(min(sc.number_of_lines, rows))]
+            c = sc.cursor_coord
+            cx, cy, first = c.x, c.y - sc.number_of_lines_above_screen, base
+        else:
+            lines = await s.async_get_contents(first, rows)
+            cx, cy = -1, -1
+    out = [styled(line, cols) for line in lines]
+    return {"ok": True, "cols": cols, "rows": rows, "cx": cx, "cy": cy, "lines": out,
+            "first": first, "base": base, "history": li.scrollback_buffer_height}
+
+async def find(connection, app, req):
+    """Every line of the session's history and screen that has the words, ignoring case: [line, column]."""
+    s = app.get_session_by_id(req["session"])
+    if s is None:
+        return {"ok": False, "why": "no such session"}
+    q = req["find"].casefold()
+    async with iterm2.Transaction(connection):
+        li = await s.async_get_line_info()
+        total = li.scrollback_buffer_height + li.mutable_area_height
+        lines = await s.async_get_contents(li.overflow, total)
+    hits = []
+    for i, line in enumerate(lines):
+        text = line.string.casefold()
+        at = text.find(q)
+        while at >= 0 and len(hits) < 2000:
+            hits.append([li.overflow + i, at])
+            at = text.find(q, at + max(1, len(q)))
+    return {"ok": True, "matches": hits, "base": li.overflow + li.scrollback_buffer_height}
+
+async def type_text(app, req):
+    s = app.get_session_by_id(req["session"])
+    if s is None:
+        return {"ok": False, "why": "no such session"}
+    await s.async_send_text(req["type"], suppress_broadcast=True)
+    return {"ok": True}
 
 async def main(connection):
     app = await iterm2.async_get_app(connection)
@@ -209,7 +284,12 @@ async def main(connection):
         except Exception:
             continue
         try:
-            out = await screen(app, req["session"])
+            if "type" in req:
+                out = await type_text(app, req)
+            elif "find" in req:
+                out = await find(connection, app, req)
+            else:
+                out = await screen(connection, app, req)
         except Exception as e:
             out = {"ok": False, "why": str(e)}
         out["id"] = req.get("id")

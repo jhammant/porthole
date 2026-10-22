@@ -52,7 +52,8 @@ enum RemoteDialPolicy {
         }
     }
 
-    /// The dial order: the address that last worked; VPN names, VPN IPv4, VPN IPv6; LAN addresses
+    /// The dial order: LAN addresses in a subnet this device shares first (Porthole); then the address that
+    /// last worked; VPN names, VPN IPv4, VPN IPv6; LAN addresses
     /// in a subnet this device shares (it is at home, and Bonjour failed); internet names, then
     /// internet addresses; the other LAN addresses (reached through a VPN into the home network).
     /// Duplicates (same host and port) are dialed once. `localIPv4` is this device's own IPv4
@@ -80,6 +81,13 @@ enum RemoteDialPolicy {
         ordered += lans.filter { !shared($0) && !loopback($0) }
         if let lastWorked, let i = ordered.firstIndex(where: { $0.key == lastWorked }) {
             ordered.insert(ordered.remove(at: i), at: 0)
+        }
+        // Porthole (22 Oct review): at home, the home network first, whatever worked last. Once Tailscale had
+        // worked, it went first and won, so every session at home ran at the away quality. Attempts start a
+        // second apart (`stagger`), so a shared subnet that isn't the Mac's costs a second at most.
+        let home = ordered.filter { shared($0) && !loopback($0) }
+        if !home.isEmpty {
+            ordered = ordered.filter(loopback) + home + ordered.filter { !loopback($0) && !(shared($0) && !loopback($0)) }
         }
         var seen = Set<String>()
         return ordered.filter { seen.insert($0.key.lowercased()).inserted }

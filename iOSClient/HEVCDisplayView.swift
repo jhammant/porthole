@@ -19,6 +19,10 @@ final class HEVCDisplayView: UIView {
     /// The streamed frame's pixel size, reported on main whenever new parameter sets arrive.
     /// Input needs it: touches are normalized against the video, not against this view.
     var onVideoSize: ((CGSize) -> Void)?
+    /// Porthole: the layer failed, so the Mac is asked for a keyframe (it no longer sends one every 4 s).
+    var onNeedsKeyframe: (() -> Void)?
+    /// Porthole: the first picture after new parameter sets is on screen (a switch has landed).
+    var onPictureShown: (() -> Void)?
     /// The same event, fired on main right after `onVideoSize`. `StreamClient` owns `onVideoSize`
     /// (it feeds `videoSize`); `StreamView` owns this one and tells the client's pointer on it
     /// (`StreamClient.pointerFrameChanged`). Two hooks instead of a chain, so re-hosting after a
@@ -283,6 +287,7 @@ final class HEVCDisplayView: UIView {
         if waitingForKeyframe {
             guard isKeyframe else { return }
             waitingForKeyframe = false
+            if let shown = onPictureShown { DispatchQueue.main.async { shown() } }
         }
 
         let count = data.count
@@ -314,6 +319,7 @@ final class HEVCDisplayView: UIView {
             print("display layer failed: \(String(describing: displayLayer.error))")
             displayLayer.flush()
             waitingForKeyframe = true
+            if let ask = onNeedsKeyframe { DispatchQueue.main.async { ask() } }
             return
         }
         displayLayer.enqueue(sample)

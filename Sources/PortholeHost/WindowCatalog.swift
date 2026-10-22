@@ -136,6 +136,8 @@ final class WindowCatalog {
     private var passOwed = false
     /// What each window looked like when its thumbnail was last taken, and when.
     private var thumbStamps: [UInt32: (info: WindowInfo, at: ContinuousClock.Instant)] = [:]
+    /// Porthole: each window's last thumbnail sent, as a hash of its JPEG, so an unchanged one isn't sent again.
+    private var sentThumbHash: [UInt32: Int] = [:]
     /// Refreshes can overlap (startup call plus the first poll); only the newest result applies.
     private var refreshSeq = 0
     private var appliedSeq = 0
@@ -241,6 +243,7 @@ final class WindowCatalog {
     private func resendAllThumbnails() {
         guard pollTask != nil else { return }
         thumbStamps = [:]
+        sentThumbHash = [:]       // someone new: every thumbnail goes, changed or not
         passOwed = true
         sleeper?.cancel()
     }
@@ -315,10 +318,13 @@ final class WindowCatalog {
         let now = ContinuousClock.now
         let infoByID = Dictionary(uniqueKeysWithValues: infos.map { ($0.id, $0) })
         thumbStamps = thumbStamps.filter { infoByID[$0.key] != nil }      // forget closed windows
+        sentThumbHash = sentThumbHash.filter { infoByID[$0.key] != nil }
         for w in windows {
             if Task.isCancelled { return }
             guard let info = infoByID[w.windowID] else { continue }
-            if let stamp = thumbStamps[w.windowID], stamp.info == info, w.windowID != activeWindowID,
+            // Porthole (22 Oct review): the streamed window at the same 6 s as the rest (the device watches it
+            // already), not every 2 s.
+            if let stamp = thumbStamps[w.windowID], stamp.info == info,
                now - stamp.at < Self.staticThumbnailInterval { continue }
             thumbStamps[w.windowID] = (info, now)
             let sf = min(box.width / w.frame.width, box.height / w.frame.height)
@@ -329,6 +335,11 @@ final class WindowCatalog {
             let filter = SCContentFilter(desktopIndependentWindow: w)
             guard let image = try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config),
                   let jpeg = Self.jpeg(image, quality: 0.6) else { continue }
+            // Porthole (22 Oct review): only a thumbnail that changed goes out. ~60 windows' JPEGs every 6 s sat in
+            // front of the video and key echoes on a slow link; the same pixels make the same bytes.
+            let hash = jpeg.hashValue
+            if sentThumbHash[w.windowID] == hash { Stats.shared.bump("net.thumbSame"); continue }
+            sentThumbHash[w.windowID] = hash
             onThumbnail?(w.windowID, jpeg)
         }
     }

@@ -21,8 +21,15 @@ struct PortholeModel {
     /// show side by side (docs/agent-view-plan.md). Each pane showing one counts in `terminalPanes`.
     var terminals: [String: PortholeTerminalState] = [:]
     var terminalPanes: [String: Int] = [:]
+    /// Terminals no pane shows whose last screen is kept, oldest first (`stopTerminal`).
+    var keptTerminals: [String] = []
     /// What the Mac says the person should know (kind 210), e.g. screen capture refused.
     var notice: PortholeNotice?
+    /// Porthole (22 Oct): the search across every session (kinds 214, 215): the query asked last, its number,
+    /// and the answer to it; `searching` until that answer comes.
+    var search = PortholeSearchState()
+    /// A find to start in a session's text pane once it opens (a search result tapped), by terminal id.
+    var pendingFind: [String: String] = [:]
     /// Chrome's windows and tabs (kind 208).
     var browserTabs: BrowserTabs?
     /// The Mac's windows front to back, from the last session list.
@@ -114,8 +121,15 @@ extension StreamClient {
                 state.lines[line.row] = line.runs.map(\.text).joined()
                 state.runs[line.row] = line.runs
             }
+            state.scrolledUp = screen.scrolledUp ?? 0
+            state.history = screen.history
+            state.find = screen.find
             state.version &+= 1
             porthole.terminals[screen.terminalID] = state
+        case .sessionSearchResults:
+            guard let r = Wire.decode(SessionSearchResults.self, from: data), r.id == porthole.search.id else { return }
+            porthole.search.results = r.sessions
+            porthole.search.searching = false
         default:
             break
         }
@@ -205,7 +219,16 @@ extension StreamClient {
 
     private func stopTerminal(_ terminalID: String) {
         porthole.terminalPanes[terminalID] = nil
-        porthole.terminals[terminalID] = nil
+        // Porthole (22 Oct review): its last screen stays, so going back to the session shows it at once (in
+        // its own colours) while the Mac's fresh one comes; the oldest kept go past eight.
+        porthole.terminals[terminalID]?.find = nil
+        porthole.terminals[terminalID]?.scrolledUp = 0
+        porthole.keptTerminals.removeAll { $0 == terminalID }
+        porthole.keptTerminals.append(terminalID)
+        while porthole.keptTerminals.count > 8 {
+            let old = porthole.keptTerminals.removeFirst()
+            if porthole.terminalPanes[old] == nil { porthole.terminals[old] = nil }
+        }
         send(.watchTerminal, payload: Wire.encode(TerminalRequest(terminalID: terminalID, stop: true)))
     }
 
@@ -213,12 +236,57 @@ extension StreamClient {
     func watchTerminal(_ terminalID: String, windowID: UInt32?, fit: (columns: Int, rows: Int)? = nil) {
         guard porthole.terminalPanes[terminalID] != nil else { return }
         if demo {
+            let find = porthole.terminals[terminalID]?.find
             porthole.terminals[terminalID] = PortholeDemo.screen(terminalID, columns: fit?.columns ?? 100, rows: fit?.rows ?? 40)
+            if let q = find?.query { porthole.terminals[terminalID]?.find = PortholeDemo.find(q, in: porthole.terminals[terminalID]) }
             return
         }
         send(.watchTerminal, payload: Wire.encode(TerminalRequest(terminalID: terminalID, windowID: windowID,
                                                                    fitColumns: fit?.columns, fitRows: fit?.rows,
                                                                    colours: Self.textColours)))
+    }
+
+    // MARK: Scroll, find and search (22 Oct)
+
+    /// The pane shows its session `lines` up from the live screen (0: the live screen), kind 213.
+    func scrollTerminal(_ terminalID: String, to lines: Int) {
+        guard porthole.terminalPanes[terminalID] != nil, !demo else { return }
+        send(.terminalView, payload: Wire.encode(TerminalView(terminalID: terminalID, scrolledUp: max(0, lines))))
+    }
+
+    /// Finds words in the pane's session (its history and screen) and shows the newest match; `step` -1
+    /// shows the one before it, +1 the one after.
+    func findInTerminal(_ terminalID: String, _ query: String, step: Int = 0) {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard porthole.terminalPanes[terminalID] != nil, !q.isEmpty else { return }
+        if demo { porthole.terminals[terminalID]?.find = PortholeDemo.find(q, in: porthole.terminals[terminalID]); porthole.terminals[terminalID]?.version &+= 1; return }
+        send(.terminalView, payload: Wire.encode(TerminalView(terminalID: terminalID, find: String(q.prefix(PortholeWire.maxSearchQuery)), step: step)))
+    }
+
+    func endFind(_ terminalID: String) {
+        porthole.terminals[terminalID]?.find = nil
+        porthole.terminals[terminalID]?.version &+= 1
+        guard porthole.terminalPanes[terminalID] != nil, !demo else { return }
+        send(.terminalView, payload: Wire.encode(TerminalView(terminalID: terminalID, endFind: true)))
+    }
+
+    /// Words across every session (kind 214); an empty query clears the results.
+    func searchSessions(_ query: String) {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        porthole.search.id += 1
+        porthole.search.query = q
+        guard q.count >= PortholeWire.minSessionSearch else {
+            porthole.search.results = []
+            porthole.search.searching = false
+            return
+        }
+        porthole.search.searching = true
+        if demo {
+            porthole.search.results = PortholeDemo.search(q, in: porthole.sessions)
+            porthole.search.searching = false
+            return
+        }
+        send(.sessionSearch, payload: Wire.encode(SessionSearch(id: porthole.search.id, query: String(q.prefix(PortholeWire.maxSearchQuery)))))
     }
 
     /// Text in dark or light colours (the sidebar's Text colours; dark unless Jon picks light, 21 Oct).
@@ -272,4 +340,17 @@ struct PortholeTerminalState: Equatable {
     var background: UInt32 = 0x000000
     /// Bumped with every screen, so a view redraws once per screen.
     var version = 0
+    /// Porthole (22 Oct): how far up the session's history the screen is (0: live), the history's length
+    /// (nil: the host can't scroll this terminal), and the find running in it.
+    var scrolledUp = 0
+    var history: Int?
+    var find: TerminalFind?
+}
+
+/// The search across sessions, as the sidebar shows it.
+struct PortholeSearchState: Equatable {
+    var id = 0
+    var query = ""
+    var results: [SessionSearchHits] = []
+    var searching = false
 }

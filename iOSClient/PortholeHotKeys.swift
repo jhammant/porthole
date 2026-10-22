@@ -28,7 +28,7 @@ enum PortholeHotKeys {
     enum Action: Equatable {
         case switcher, nextNeedingYou, nextSession, previousSession, session(Int)
         case nextWindow, previousWindow, nextAppWindow, previousAppWindow, nextApp, previousApp, tiles, sidebar, topBar
-        case flip, flipFurther, app(String), back, forward, agentView, textMode
+        case flip, flipFurther, app(String), back, forward, agentView, textMode, searchSessions
     }
 
     /// Set by the connected screen (PortholeShell).
@@ -56,6 +56,7 @@ enum PortholeHotKeys {
         case .keyboardCloseBracket: return .nextApp
         case .keyboardOpenBracket: return .previousApp
         case .keyboardSpacebar: return .switcher
+        case .keyboardSlash: return .searchSessions
         case .keyboardJ: return .nextNeedingYou
         case .keyboardRightArrow: return .forward
         case .keyboardLeftArrow: return .back
@@ -119,6 +120,7 @@ struct PortholeKeyCommands: View {
             key("Show or hide the top bar", "b", .topBar)
             key("Agent view", "v", .agentView)
             key("Session as text or window", "t", .textMode)
+            key("Search all sessions", "/", .searchSessions)
             ForEach(PortholeFavourites.apps.filter { $0.key != nil }, id: \.bundleID) { fav in key(fav.name, KeyEquivalent(fav.key!), .app(fav.bundleID)) }
             ForEach(1...9, id: \.self) { n in key("Session \(n)", KeyEquivalent(Character("\(n)")), .session(n)) }
         }

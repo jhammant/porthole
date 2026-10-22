@@ -64,10 +64,12 @@ extension StreamClient {
     static func wantedFPS(remote: Bool = false) -> Int {
         let ceiling = screenMaximumFPS()
         let rate = ProcessInfo.processInfo.isLowPowerModeEnabled ? min(60, ceiling) : ceiling
-        return remote ? min(60, rate) : rate
+        // Porthole (22 Oct review): away, 30. Bitrate is per 60 fps and scales with the rate, so Low runs at 2 Mbps
+        // with the same bits a frame: the ~3.6 Mbps relay couldn't carry Low at 60, and the backlog was the lag.
+        return remote ? min(30, rate) : rate
     }
 
-    /// This session is away from home through a VPN or over the internet, so it asks for 60 fps.
+    /// This session is away from home through a VPN or over the internet, so it asks for 30 fps.
     var awayCapsFrameRate: Bool { remoteRoute?.capsFrameRate ?? false }
 
     /// The fastest rate this device's screen shows, Low Power Mode aside: 120 on ProMotion, 60 on

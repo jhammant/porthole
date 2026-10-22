@@ -411,12 +411,14 @@ def main():
         latest = link.latest(K_SESSIONS) or {"sessions": []}
         mine = next((s for s in latest["sessions"] if s["id"] == scratch["id"]), scratch)
         link.send(K_WATCH_TERM, {"terminalID": mine["terminalID"], "windowID": mine.get("windowID")})
-        first = link.wait(lambda k, b: k == K_SCREEN and b.get("full"), 10)
+        # The scratch session's own first screen: the agent view's, earlier in the run, is full too.
+        first = link.wait(lambda k, b: k == K_SCREEN and b.get("full") and b.get("terminalID") == mine["terminalID"], 10)
         lines = ["".join(r["text"] for r in l["runs"]) for l in (first or {}).get("lines", [])]
         check("terminal screen", first is not None and first["rows"] == len(lines) and any("\u276f" in l for l in lines),
               f"{first['columns']}×{first['rows']}, prompt on screen: {any(chr(0x276f) in l for l in lines)}" if first else "no screen")
         link.send(K_TERM_INPUT, {"terminalID": mine["terminalID"], "text": "Reply with exactly the word term-ok and nothing else."})
-        echoed = link.wait(lambda k, b: k == K_SCREEN and any("term-ok and nothing" in "".join(r["text"] for r in l["runs"]) for l in b.get("lines", [])), 10)
+        echoed = link.wait(lambda k, b: k == K_SCREEN and b.get("terminalID") == mine["terminalID"]
+                           and any("term-ok and nothing" in "".join(r["text"] for r in l["runs"]) for l in b.get("lines", [])), 10)
         link.send(K_TERM_INPUT, {"terminalID": mine["terminalID"], "text": "\r"})
         answered = said("claude", "term-ok", 90)
         check("terminal keys", echoed is not None and answered is not None,
@@ -457,6 +459,9 @@ def main():
             host.wait(timeout=10)
 
 
-main()
-print(f"{'all checks passed' if fails == 0 else f'{fails} check(s) failed'}")
-sys.exit(fails)
+if __name__ == "__main__":
+    # Only run as a script: Scripts/porthole-e2e-history.py loads this file for its helpers alone (it ran the
+    # whole judge, scratch session and all, when this was unguarded, 22 Oct).
+    main()
+    print(f"{'all checks passed' if fails == 0 else f'{fails} check(s) failed'}")
+    sys.exit(fails)

@@ -38,6 +38,9 @@ final class InputInjector {
     private var lastMoveArrival: CFTimeInterval = 0   // jitter probe, see apply()
     private var left = ButtonState()
     private var right = ButtonState()
+    /// Porthole: the device whose down each button is.
+    private var leftOwner: KeyStrokes.Device?
+    private var rightOwner: KeyStrokes.Device?
 
     /// The Mac's pointer (docs/pointer-visibility-plan.md §4.5): told just before each post of a
     /// pointer or scroll event, never after. The network queue reads the pointer while this posts,
@@ -87,6 +90,14 @@ final class InputInjector {
                     else if gap > 0.050 { Stats.shared.bump("in.gap>50ms") }
                     else if gap > 0.025 { Stats.shared.bump("in.gap>25ms") }
                 }
+            }
+            // Porthole: who pressed each button, so a device that leaves mid-drag lets go of its own (22 Oct review).
+            switch action {
+            case .leftDown: leftOwner = device
+            case .rightDown: rightOwner = device
+            case .leftUp: leftOwner = nil
+            case .rightUp: rightOwner = nil
+            default: break
             }
             pointer(action, at: point(x, y, in: rect))
         case .scroll(let x, let y, let dx, let dy):
@@ -455,20 +466,24 @@ final class InputInjector {
     private var keys = KeyStrokes()
 
     private func key(hidUsage: UInt16, down: Bool, modifiers: UInt64, from device: KeyStrokes.Device) {
+        // Porthole: a key's down again while it is down is the device repeating a held key (22 Oct), marked
+        // as a repeat, as the Mac's own keyboard marks its.
+        let isRepeat = down && keys.isDown(hidUsage) && KeyStrokes.modifierKeys[hidUsage] == nil
         guard let strokes = keys.key(usage: hidUsage, down: down, modifiers: modifiers, from: device) else {
             Stats.shared.bump("in.unknownKey")
             return
         }
-        post(strokes)
+        post(strokes, autorepeat: isRepeat)
     }
 
     /// Posts KeyStrokes' events in order, each made from `source` with exactly its flags (a modifier's
     /// own keycode makes a flags-changed event), and has each up checked a quarter of a second later
     /// (KeyUpCheck: the table read just before each down, a read that needs no permission).
-    private func post(_ strokes: [KeyStroke], letGo: Bool = false) {
-        for stroke in strokes {
+    private func post(_ strokes: [KeyStroke], letGo: Bool = false, autorepeat: Bool = false) {
+        for (i, stroke) in strokes.enumerated() {
             guard let event = CGEvent(keyboardEventSource: source, virtualKey: stroke.virtualKey, keyDown: stroke.down) else { continue }
             event.flags = CGEventFlags(rawValue: stroke.flags)
+            if autorepeat, i == strokes.count - 1 { event.setIntegerValueField(.keyboardEventAutorepeat, value: 1) }
             // A dry run reads no table: what it would hold is the last event's flags, none of them the Mac's own.
             let table = stroke.down && !dryRun ? CGEventSource.flagsState(.hidSystemState).rawValue : lastKeyFlags
             let check = upCheck.posting(stroke, table: table, posted: lastKeyFlags)
@@ -486,6 +501,10 @@ final class InputInjector {
     /// Mac and make the next click a ⌘-click. Counted, `in.keyLetGo`, when posted.
     func releaseKeys(of device: KeyStrokes.Device) {
         post(keys.release(device), letGo: true)
+        // Porthole (22 Oct review): a button it held down goes up too, where the pointer is: a device that
+        // dropped mid-drag left the button down, and every later move dragged.
+        if left.isDown, leftOwner == device { pointer(.leftUp, at: pointerNow()); leftOwner = nil; Stats.shared.bump("in.buttonLetGo") }
+        if right.isDown, rightOwner == device { pointer(.rightUp, at: pointerNow()); rightOwner = nil; Stats.shared.bump("in.buttonLetGo") }
     }
 
     /// The host is going: every key any device holds down goes up (KeyStrokes.releaseAll), then a

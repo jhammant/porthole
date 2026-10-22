@@ -1100,6 +1100,10 @@ struct StreamScreen: View {
                     .overlay { if client.demo, let image = PortholeDemo.picture(for: client.active) {
                         Image(uiImage: image).resizable().aspectRatio(contentMode: .fit)
                     } }
+                    // Porthole: the picked window's thumbnail until its first frame lands (StreamClient.switchingTo).
+                    .overlay { if let thumb = client.switchingTo {
+                        Image(uiImage: thumb).resizable().aspectRatio(contentMode: .fit).blur(radius: 1.5).transition(.opacity)
+                    } }
                     .scaleEffect(desktopZoom.scale, anchor: .topLeading)
                     .offset(desktopZoom.offset)
                 // Same frame as the video, so a touch maps straight onto the streamed frame.

@@ -138,5 +138,54 @@ check("screen: the last rows, a long line wrapped", screen?.lines == ["one", "01
 check("screen: a short text is padded to its rows", PortholeScreenText.parse("4,20\nhello\n")?.lines == ["hello", "", "", ""])
 check("screen: a bad header is refused", PortholeScreenText.parse("x,y\nhello") == nil && PortholeScreenText.parse("no newline") == nil)
 
+// MARK: States, 22 Oct (the states review)
+func at(_ t: String) -> String { "2026-10-22T\(t).000Z" }
+func turnOver(workflows: Int = 0) -> Data { json(["type": "system", "subtype": "turn_duration", "timestamp": ts, "pendingWorkflowCount": workflows]) }
+func said(_ text: String, _ when: String = ts, apiError: Bool = false) -> Data {
+    json(["type": "assistant", "timestamp": when, "isApiErrorMessage": apiError, "message": ["role": "assistant", "content": [["type": "text", "text": text]]]])
+}
+func notification(_ when: String = ts) -> Data { json(["type": "user", "timestamp": when, "message": ["role": "user", "content": "<task-notification>build done</task-notification>"]]) }
+func queued() -> Data { json(["type": "attachment", "timestamp": ts, "attachment": ["type": "queued_command", "humanTurn": true, "prompt": "go"]]) }
+func states(_ lines: [Data]) -> PortholeTranscript { var m = PortholeTranscript(); for l in lines { m.ingest(l) }; return m }
+
+check("a background shell only (busy, turn over): Done", states([user("fix it"), said("Done."), turnOver()]).state(status: "busy") == .done)
+check("…and a question then is Needs you", states([user("fix it"), said("Shall I ship it?"), turnOver()]).state(status: "busy") == .needsYou)
+check("background workflows pending: Working", states([user("fix it"), said("Started."), turnOver(workflows: 2)]).state(status: "busy") == .working)
+check("a new turn after the last: Working", states([user("a"), said("Done."), turnOver(), user("b")]).state(status: "busy") == .working)
+check("a turn a task notification started: Working", states([user("a"), said("Done."), turnOver(), notification()]).state(status: "busy") == .working)
+let buried = states([user("a"), said("Shall I send it?", at("10:00:00")), turnOver(), notification(at("10:05:00")), said("The build finished.", at("10:06:00")), turnOver()])
+check("a question a task notification's turn buried still needs you", buried.state(status: "idle") == .needsYou)
+check("…since the question, not the later turn", buried.since(for: .needsYou) == PortholeTranscript.date(at("10:00:00")))
+var answered = buried; answered.ingest(user("yes, send it"))
+check("your prompt answers it", answered.state(status: "busy") == .working && answered.openAskAt == nil)
+var queuedAnswer = buried; queuedAnswer.ingest(queued())
+check("a prompt typed mid-turn answers it", queuedAnswer.openAskAt == nil)
+var asked = states([user("a"), toolUse("q1", "AskUserQuestion", ["questions": [["question": "Which?", "options": [["label": "A"], ["label": "B"]]]]]), said("Which one?"), turnOver()])
+asked.ingest(toolResult("q1"))
+check("answering AskUserQuestion answers it", asked.openAskAt == nil)
+check("waiting is Needs you whatever the tail", states([user("a"), said("Done."), turnOver()]).state(status: "waiting") == .needsYou)
+check("an API error is Needs you", states([user("a"), said("API Error: overloaded", apiError: true), turnOver()]).state(status: "idle") == .needsYou)
+var interrupt = states([user("a"), toolUse("t9", "Bash", ["command": "ls"])])
+interrupt.ingest(user("[Request interrupted by user for tool use]"))
+check("the tool-use interrupt reads as an interrupt", interrupt.entries.last?.text == "Interrupted by you" && interrupt.state(status: "idle") == .idle)
+let working = states([user("a", extra: ["timestamp": at("09:00:00")]), toolUse("t1", "Bash", ["command": "x"]), said("Running.", at("09:30:00"))])
+check("Working's since is the turn's start, so the order holds still", working.since(for: .working) == PortholeTranscript.date(at("09:00:00")))
+for text in ["I confirmed the fix is live.", "Want me to also add tests?", "If you'd rather keep the old name, tell me.",
+             "Draft: \"Are you free Tuesday?\"\n\nIt's in the outbox.", "- open: does it need a flag?\n- next: ship",
+             "See `git status?` and https://example.com/a?b=1"] {
+    check("asks nothing: \(text.prefix(40))", !PortholeTranscript.asks(text))
+}
+for text in ["Shall I send it?", "Which layout do you want, two or four?", "Ready. Say \"go\" and I'll send it.",
+             "Please confirm the date.", "Shall I send it?\n\nEverything else is done.", "(Shall I merge it?)"] {
+    check("asks: \(text.prefix(40))", PortholeTranscript.asks(text))
+}
+
+// claude agents --json: an entry missing a key drops only itself (22 Oct: one without `status` emptied the list).
+let agentsJSON = Data(#"[{"pid":1,"sessionId":"a","cwd":"/x","name":"one","status":"busy","kind":"interactive"},{"pid":2,"sessionId":"b","cwd":"/y","name":"two","kind":"interactive"},{"pid":3,"cwd":"/z"}]"#.utf8)
+let decodedAgents = PortholeSessions.decodeAgents(agentsJSON)
+check("agents: one entry missing status still reads, one missing its id drops alone", decodedAgents?.map(\.sessionId) == ["a", "b"] && decodedAgents?[1].status == nil)
+check("agents: not a list is a failed read, not no sessions", PortholeSessions.decodeAgents(Data("{}".utf8)) == nil)
+check("agents: an empty list is no sessions", PortholeSessions.decodeAgents(Data("[]".utf8))?.isEmpty == true)
+
 print("\(passes) checks, \(fails) failed")
 exit(Int32(fails))

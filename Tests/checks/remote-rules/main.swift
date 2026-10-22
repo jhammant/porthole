@@ -59,17 +59,20 @@ let mac = [a("192.168.1.20", "lan", "Wi-Fi"), a("mac-mini.tail1234.ts.net", "vpn
            a("203.0.113.9", "internet", "Router"), a("2001:db8::20", "internet", "IPv6"), a("100.101.102.103", "vpn", "Tailscale")]
 let home: [(address: [UInt8], prefix: Int)] = [([192, 168, 1, 77], 24)]
 let o1 = R.order(mac, remotePort: 7455, lastWorked: nil, localIPv4: home).map { "\($0.host):\($0.port)" }
-check("order: VPN names, VPN v4, VPN v6, the shared LAN, internet names, internet IPs, other LANs; once each (\(o1))",
-      o1 == ["mac-mini.tail1234.ts.net:7455", "100.101.102.103:7455", "fd7a:115c:a1e0::1234:7455", "192.168.1.20:7455",
+// Porthole (22 Oct): at home, the shared LAN first, so a session at home streams at the home quality.
+check("order: the shared LAN, VPN names, VPN v4, VPN v6, internet names, internet IPs, other LANs; once each (\(o1))",
+      o1 == ["192.168.1.20:7455", "mac-mini.tail1234.ts.net:7455", "100.101.102.103:7455", "fd7a:115c:a1e0::1234:7455",
              "home.example.net:17455", "203.0.113.9:7455", "2001:db8::20:7455", "10.0.5.9:7455"])
 let away = R.order(mac, remotePort: 7455, lastWorked: nil, localIPv4: [([172, 20, 10, 2], 28)]).map(\.host)
 check("order: away, the LAN addresses go last", Array(away.suffix(2)) == ["192.168.1.20", "10.0.5.9"])
-check("order: the address that last worked first", R.order(mac, remotePort: 7455, lastWorked: "203.0.113.9|7455", localIPv4: home).first?.host == "203.0.113.9")
+check("order: away, the address that last worked first", R.order(mac, remotePort: 7455, lastWorked: "203.0.113.9|7455", localIPv4: [([172, 20, 10, 2], 28)]).first?.host == "203.0.113.9")
+check("order: at home, the shared LAN, then the address that last worked",
+      R.order(mac, remotePort: 7455, lastWorked: "100.101.102.103|7455", localIPv4: home).prefix(2).map(\.host) == ["192.168.1.20", "100.101.102.103"])
 check("order: a stale lastWorked changes nothing", R.order(mac, remotePort: 7455, lastWorked: "1.2.3.4|7455", localIPv4: home).map { "\($0.host):\($0.port)" } == o1)
 check("order: the Mac's port for addresses without one", R.order([a("100.64.0.1", "vpn", "Tailscale")], remotePort: 7460, lastWorked: nil, localIPv4: []).first?.port == 7460)
 check("order: a test host's loopback address first (the simulator on the same Mac), whatever came before it",
       R.order([a("100.64.0.2", "vpn", "Tailscale"), a("127.0.0.1", "lan", "This Mac"), a("192.168.1.20", "lan", "Wi-Fi")], remotePort: 7455,
-              lastWorked: nil, localIPv4: home).map(\.host) == ["127.0.0.1", "100.64.0.2", "192.168.1.20"])
+              lastWorked: nil, localIPv4: home).map(\.host) == ["127.0.0.1", "192.168.1.20", "100.64.0.2"])
 check("order: a Tailscale-shaped address saved as internet is still a VPN address",
       R.order([a("203.0.113.9", "internet", "Router"), a("100.100.1.1", "internet", "")], remotePort: 7455, lastWorked: nil, localIPv4: []).first?.host == "100.100.1.1")
 

@@ -17,6 +17,9 @@ final class PortholeAnywhereHost: @unchecked Sendable {
         var jws: String
         var name: String
         var updated: Double
+        /// Porthole (22 Oct review): the subscription period this JWS proves is over; nothing goes to the device
+        /// until it registers again with its renewed one (it does on its next connection to this Mac).
+        var lapsed: Bool? = nil
     }
 
     static let endpoint = URL(string: ProcessInfo.processInfo.environment["PORTHOLE_ANYWHERE_URL"] ?? "https://anywhere.hammantlabs.com/v1/notify")!
@@ -28,6 +31,8 @@ final class PortholeAnywhereHost: @unchecked Sendable {
     private var connected: [ObjectIdentifier: String] = [:]
     private let sessions = PortholeSessions()
     private var lastStates: [String: ClaudeSession.State]?
+    /// The sessions that need you, each with when its question began, as last looked.
+    private var announced: [String: Double] = [:]
     private var timer: DispatchSourceTimer?
 
     init() {
@@ -84,16 +89,20 @@ final class PortholeAnywhereHost: @unchecked Sendable {
                                                state: .needsYou, preview: "Should the limit apply per user or per key?"))
         }
         let now = Dictionary(list.sessions.map { ($0.id, $0.state) }, uniquingKeysWith: { a, _ in a })
-        // The first look only learns the states: nothing that already needed you is announced again.
-        if let last = lastStates {
-            for s in list.sessions where s.state == .needsYou && last[s.id] != .needsYou { notify(s) }
+        // The first look only learns the states: nothing that already needed you is announced again. After it,
+        // one push per question (22 Oct, the states review): keyed on when it began, so a Working blip from a
+        // background task's turn doesn't announce the same question twice.
+        let asking = list.sessions.filter { $0.state == .needsYou }
+        if lastStates != nil {
+            for s in asking where announced[s.id] != (s.since ?? 0) { notify(s) }
         }
+        announced = Dictionary(asking.map { ($0.id, $0.since ?? 0) }, uniquingKeysWith: { a, _ in a })
         lastStates = now
     }
 
     private func notify(_ s: ClaudeSession) {
         let here = Set(connected.values)
-        for r in registrations.values where !here.contains(r.token) {
+        for r in registrations.values where !here.contains(r.token) && r.lapsed != true {
             let body: [String: Any] = ["device": r.token, "env": r.env, "jws": r.jws, "session": s.id,
                                        "title": "\(s.title) needs you", "body": s.preview ?? "Claude is waiting for you."]
             var request = URLRequest(url: Self.endpoint)
@@ -102,11 +111,19 @@ final class PortholeAnywhereHost: @unchecked Sendable {
             request.httpBody = try? JSONSerialization.data(withJSONObject: body)
             request.timeoutInterval = 15
             let token = r.token, name = r.name
-            URLSession.shared.dataTask(with: request) { [weak self] _, response, _ in
+            URLSession.shared.dataTask(with: request) { [weak self] data, response, _ in
                 let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-                print("Porthole Anywhere: '\(s.title)' needs you → \(name): \(code)")
-                // No active subscription any more: that device is told no more until it registers again.
-                if code == 402 { self?.queue.async { self?.registrations[token] = nil; self?.save() } }
+                let reason = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }?["reason"] as? String
+                print("Porthole Anywhere: a session needs you → \(SafeText.label(name)): \(code)" + (reason.map { " (\($0))" } ?? ""))
+                guard code == 402 else { return }
+                self?.queue.async {
+                    // Not a subscription at all, or refunded: forgotten. A period that ended (the renewal's JWS is
+                    // on the device, which sends it on its next connection) only pauses it (22 Oct review: a 402
+                    // deleted the registration at every monthly renewal).
+                    if reason == "invalid" || reason == "revoked" { self?.registrations[token] = nil }
+                    else { self?.registrations[token]?.lapsed = true }
+                    self?.save()
+                }
             }.resume()
         }
     }

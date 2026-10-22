@@ -201,3 +201,38 @@ extension StreamClient {
         macName = ""
     }
 }
+
+// MARK: Porthole: find and search in the demo (22 Oct)
+
+extension PortholeDemo {
+    /// Words on a demo session's screen, as the Mac's find answers: every match, the newest shown.
+    static func find(_ q: String, in state: PortholeTerminalState?) -> TerminalFind? {
+        guard let state else { return nil }
+        var hits: [TerminalFindHit] = []
+        for (row, line) in state.lines.enumerated() {
+            var from = line.startIndex
+            while let r = line.range(of: q, options: .caseInsensitive, range: from..<line.endIndex) {
+                hits.append(TerminalFindHit(row: row, column: line.distance(from: line.startIndex, to: r.lowerBound), length: q.count, current: false))
+                from = r.upperBound
+            }
+        }
+        if !hits.isEmpty { hits[hits.count - 1].current = true }
+        return TerminalFind(query: q, count: hits.count, index: hits.count, hits: hits)
+    }
+
+    /// The demo sessions' words, as the Mac's search across sessions answers.
+    static func search(_ q: String, in sessions: [ClaudeSession]) -> [SessionSearchHits] {
+        sessions.compactMap { s in
+            var texts: [(TranscriptEntry.Role, String)] = [(.you, s.title)]
+            if let p = s.preview { texts.append((.claude, p)) }
+            // Claude Code's marks off the front, as a transcript's words have none.
+            if let t = s.terminalID {
+                texts += session(t, 100).map { (.claude, $0.map(\.text).joined().trimmingCharacters(in: CharacterSet(charactersIn: "⏺⎿❯> ").union(.whitespaces))) }
+            }
+            let hits = texts.filter { $0.1.range(of: q, options: .caseInsensitive) != nil }
+                .map { SessionSearchHit(role: $0.0, snippet: $0.1, at: s.since) }
+            return hits.isEmpty ? nil : SessionSearchHits(sessionID: s.id, count: hits.count,
+                                                          hits: Array(hits.prefix(PortholeWire.searchSnippetsPerSession)))
+        }
+    }
+}

@@ -11,7 +11,10 @@ import Foundation
 
 setvbuf(stdout, nil, _IOLBF, 0)
 
-let source = """
+// Porthole (22 Oct review): two scripts, each compiled the first time it is needed. One script for both apps
+// could not compile on a Mac without Chrome or without iTerm2 (each app's own terms need the app), which
+// broke both; the host asks for Chrome's tabs only while Chrome runs, and for iTerm2 only for its sessions.
+let itermSource = """
 on findsession(wid, uid)
     with timeout of 3 seconds
         tell application "iTerm2"
@@ -64,6 +67,17 @@ on resizeto(wid, uid, c, r)
     return (oc as text) & "," & (orw as text)
 end resizeto
 
+on typeinto(wid, uid, body)
+    set s to findsession(wid, uid)
+    if s is missing value then return "missing"
+    with timeout of 3 seconds
+        tell application "iTerm2" to tell s to write text body newline no
+    end timeout
+    return "ok"
+end typeinto
+"""
+
+let chromeSource = """
 on chrometabs()
     set sep to character id 9
     set eol to character id 10
@@ -101,25 +115,27 @@ on activatetab(wid, tid)
     end timeout
     return "missing"
 end activatetab
-
-on typeinto(wid, uid, body)
-    set s to findsession(wid, uid)
-    if s is missing value then return "missing"
-    with timeout of 3 seconds
-        tell application "iTerm2" to tell s to write text body newline no
-    end timeout
-    return "ok"
-end typeinto
 """
 
 struct Request: Decodable { let id: Int; let handler: String; let args: [String] }
 struct Answer: Encodable { let id: Int; let ok: Bool; let result: String? }
 
-guard let script = NSAppleScript(source: source) else { exit(1) }
-var compileError: NSDictionary?
-guard script.compileAndReturnError(&compileError) else {
-    FileHandle.standardError.write("PortholeOSAHelper: the script did not compile: \(compileError ?? [:])\n".data(using: .utf8)!)
-    exit(1)
+/// Each script compiled on first use; nil after it failed to (its app isn't installed), and tried again a minute later.
+var scripts: [String: NSAppleScript] = [:]
+var failedAt: [String: Date] = [:]
+
+func script(for handler: String) -> NSAppleScript? {
+    let key = ["chrometabs", "activatetab"].contains(handler) ? "chrome" : "iterm"
+    if let s = scripts[key] { return s }
+    if let at = failedAt[key], Date().timeIntervalSince(at) < 60 { return nil }
+    var compileError: NSDictionary?
+    guard let s = NSAppleScript(source: key == "chrome" ? chromeSource : itermSource), s.compileAndReturnError(&compileError) else {
+        FileHandle.standardError.write("PortholeOSAHelper: the \(key) script did not compile: \(compileError ?? [:])\n".data(using: .utf8)!)
+        failedAt[key] = Date()
+        return nil
+    }
+    scripts[key] = s
+    return s
 }
 
 func code(_ s: String) -> FourCharCode { s.utf8.reduce(0) { ($0 << 8) | FourCharCode($1) } }
@@ -133,6 +149,7 @@ func call(_ handler: String, _ args: [String]) -> (Bool, String?) {
     let list = NSAppleEventDescriptor.list()
     for (i, arg) in args.enumerated() { list.insert(NSAppleEventDescriptor(string: arg), at: i + 1) }
     event.setParam(list, forKeyword: keyDirectObject)
+    guard let script = script(for: handler) else { return (false, nil) }
     var error: NSDictionary?
     let result = script.executeAppleEvent(event, error: &error)
     return error == nil ? (true, result.stringValue) : (false, nil)

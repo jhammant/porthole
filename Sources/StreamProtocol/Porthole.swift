@@ -191,12 +191,96 @@ public struct TerminalScreen: Codable, Sendable {
     /// The lines that changed; every line when `full`.
     public var lines: [TerminalLine]
     public var full: Bool
+    /// Porthole: how many lines up from the live screen these are (0 or nil: the live screen), and how many
+    /// lines of history the session has above its live screen (nil: the host can't scroll it).
+    public var scrolledUp: Int?
+    public var history: Int?
+    /// Porthole: the find in this session (TerminalView's `find`), while one runs.
+    public var find: TerminalFind?
     public init(terminalID: String, columns: Int, rows: Int, cursorX: Int, cursorY: Int, foreground: UInt32,
-                background: UInt32, lines: [TerminalLine], full: Bool) {
+                background: UInt32, lines: [TerminalLine], full: Bool, scrolledUp: Int? = nil, history: Int? = nil,
+                find: TerminalFind? = nil) {
         self.terminalID = terminalID; self.columns = columns; self.rows = rows; self.cursorX = cursorX
         self.cursorY = cursorY; self.foreground = foreground; self.background = background
         self.lines = lines; self.full = full
+        self.scrolledUp = scrolledUp; self.history = history; self.find = find
     }
+}
+
+/// Porthole, device → host (kind 213): where a text pane looks in its session's history, and what it looks
+/// for (22 Oct: Jon, "I want to be able to scroll the window up with two fingers", "a search on the claude
+/// code windows"). Only for the terminal the device watches; the live screen again on any key typed.
+public struct TerminalView: Codable, Sendable {
+    public var terminalID: String
+    /// Lines up from the live screen; 0 is the live screen. Ignored with `find`.
+    public var scrolledUp: Int?
+    /// Find this, ignoring case, in the session's history and screen, and show it.
+    public var find: String?
+    /// With `find`: 0 the newest match (a new find), -1 the one before it (older, up), +1 the one after.
+    public var step: Int?
+    /// The find ends: its highlights go, the view stays where it is.
+    public var endFind: Bool?
+    public init(terminalID: String, scrolledUp: Int? = nil, find: String? = nil, step: Int? = nil, endFind: Bool? = nil) {
+        self.terminalID = terminalID; self.scrolledUp = scrolledUp; self.find = find; self.step = step; self.endFind = endFind
+    }
+}
+
+/// A find in a session's terminal: how many matches, which one is shown, and where the matches are on the
+/// screen as sent.
+public struct TerminalFind: Codable, Hashable, Sendable {
+    public var query: String
+    public var count: Int
+    /// 1 to `count`, counted from the oldest; 0 when nothing matched.
+    public var index: Int
+    public var hits: [TerminalFindHit]
+    public init(query: String, count: Int, index: Int, hits: [TerminalFindHit]) {
+        self.query = query; self.count = count; self.index = index; self.hits = hits
+    }
+}
+
+public struct TerminalFindHit: Codable, Hashable, Sendable {
+    public var row: Int
+    public var column: Int
+    public var length: Int
+    public var current: Bool
+    public init(row: Int, column: Int, length: Int, current: Bool) {
+        self.row = row; self.column = column; self.length = length; self.current = current
+    }
+}
+
+/// Porthole, device → host (kind 214): find words in every Claude Code session on the Mac (22 Oct: "a search
+/// on the claude code windows, and between them all"): your prompts, Claude's words and its tool lines, in
+/// each listed session's whole transcript.
+public struct SessionSearch: Codable, Sendable {
+    /// The device's number for the search; the answer carries it back, so a stale answer is dropped.
+    public var id: Int
+    public var query: String
+    public init(id: Int, query: String) { self.id = id; self.query = query }
+}
+
+/// Porthole, host → device (kind 215): the sessions that matched, the newest match first.
+public struct SessionSearchResults: Codable, Sendable {
+    public var id: Int
+    public var query: String
+    public var sessions: [SessionSearchHits]
+    public init(id: Int, query: String, sessions: [SessionSearchHits]) { self.id = id; self.query = query; self.sessions = sessions }
+}
+
+public struct SessionSearchHits: Codable, Hashable, Sendable {
+    public var sessionID: String
+    /// Matches found in the session (at most `PortholeWire.searchMatchesPerSession`).
+    public var count: Int
+    /// The newest few, newest first.
+    public var hits: [SessionSearchHit]
+    public init(sessionID: String, count: Int, hits: [SessionSearchHit]) { self.sessionID = sessionID; self.count = count; self.hits = hits }
+}
+
+public struct SessionSearchHit: Codable, Hashable, Sendable {
+    public var role: TranscriptEntry.Role
+    /// One line round the match.
+    public var snippet: String
+    public var at: Double?
+    public init(role: TranscriptEntry.Role, snippet: String, at: Double? = nil) { self.role = role; self.snippet = snippet; self.at = at }
 }
 
 /// Device → host: what a terminal would send for the keys pressed (UTF-8, control characters
@@ -270,6 +354,12 @@ public enum PortholeWire {
     public static let replyHoldSeconds: Double = 600
     /// The most windows a `.tiles` source takes.
     public static let maxTiles = 4
+    /// Porthole's searches (kinds 213–215): the longest query, the shortest across sessions, the matches
+    /// counted in one session and the snippets sent for it.
+    public static let maxSearchQuery = 200
+    public static let minSessionSearch = 2
+    public static let searchMatchesPerSession = 99
+    public static let searchSnippetsPerSession = 4
 
     /// A reply's text as it may reach a terminal: CRLF and CR become LF, control characters other
     /// than LF and tab are removed (an escape sequence in a reply could otherwise drive the terminal),

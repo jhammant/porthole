@@ -163,10 +163,11 @@ final class HEVCEncoder {
         set(kVTCompressionPropertyKey_RealTime, kCFBooleanTrue)
         set(kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_HEVC_Main_AutoLevel)
         set(kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse)      // no B-frames
-        // Keyframes are requested on demand (new client, dropped delta, source switch); this is
-        // only a safety interval. Longer intervals cut the periodic IDR hitch; 4 s is the value
-        // every working stream so far has used.
-        set(kVTCompressionPropertyKey_MaxKeyFrameInterval, (fps * 4) as CFNumber)
+        // Keyframes are requested on demand (new client, dropped delta, source switch, and a device's
+        // own request, kind 216); this is only a safety interval. Porthole (22 Oct review): 60 s, not 4:
+        // every 4 s an IDR queued the frames and key echoes behind it on a slow link (the late-frame
+        // spikes recurred at 4 s), and over TCP nothing is lost by accident.
+        set(kVTCompressionPropertyKey_MaxKeyFrameInterval, (fps * 60) as CFNumber)
         set(kVTCompressionPropertyKey_ExpectedFrameRate, fps as CFNumber)
         set(kVTCompressionPropertyKey_AverageBitRate, bitrate as CFNumber)
         set(kVTCompressionPropertyKey_DataRateLimits, [bitrate / 8, 1] as CFArray)

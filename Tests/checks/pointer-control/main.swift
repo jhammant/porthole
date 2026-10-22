@@ -368,7 +368,8 @@ let known: [(StreamMessageKind, UInt8)] = [
     // Porthole's kinds (Porthole.swift, docs/porthole-plan.md): known to this build.
     (.claudeSessions, 200), (.watchTranscript, 201), (.transcript, 202), (.sessionReply, 203), (.replyResult, 204),
     (.watchTerminal, 205), (.terminalScreen, 206), (.terminalInput, 207), (.browserTabs, 208), (.activateTab, 209),
-    (.portholeNotice, 210), (.pickDisplay, 211), (.pushRegistration, 212),
+    (.portholeNotice, 210), (.pickDisplay, 211), (.pushRegistration, 212), (.terminalView, 213), (.sessionSearch, 214),
+    (.sessionSearchResults, 215), (.keyframeRequest, 216),
 ]
 for (kind, raw) in known {
     check(kind.rawValue == raw && StreamMessageKind(rawValue: raw) == kind, "kind \(raw) is \(kind)")

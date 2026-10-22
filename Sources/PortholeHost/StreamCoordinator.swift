@@ -43,6 +43,8 @@ package final class StreamCoordinator {
     let server: StreamServer
     // Porthole: the Claude Code session feed (PortholeHost, docs/porthole-plan.md).
     lazy var porthole = PortholeHost(server: server)
+    /// Porthole: when each device last asked for a keyframe (kind 216).
+    private var keyframeAsked: [ObjectIdentifier: CFAbsoluteTime] = [:]
     // Porthole: two or four windows on a display of their own (PortholeTiles).
     lazy var portholeTiles = PortholeTiles(sizer: sizer)
     let catalog = WindowCatalog()
@@ -605,6 +607,10 @@ package final class StreamCoordinator {
         }
         if let testMenuLine { print(testMenuLine) }   // TEST ONLY, and only with PORTHOLE_TEST_MENU_PID set
         server.start()
+        // Porthole: the session feed, and with it Porthole Anywhere's watcher, from launch: made only when the
+        // first device connected, Anywhere told nobody after a reboot or an update until then (22 Oct review).
+        // Never in a test host, which would notify Jon's devices alongside the app.
+        if !synthetic { _ = porthole }
         remote?.apply(config)        // the remote door, when Remote Access is on (or a pairing window opens later)
         if promptForPermissions || CGPreflightScreenCaptureAccess() { await catalog.refreshWindows() }
         if let match = preselect?.lowercased(),
@@ -1033,6 +1039,14 @@ package final class StreamCoordinator {
             // and answers this device alone. JSON that does not decode has no token to answer.
             guard let r = Wire.decode(FetchMenu.self, from: message.payload) else { return }
             menus.fetch(r, from: connection, who: deviceName(connection))
+        case .keyframeRequest:
+            // Porthole: a device's picture needs a keyframe (its display failed, or it came back from the
+            // background): at most one a second per device, as the periodic one is now a minute apart.
+            let id = ObjectIdentifier(connection)
+            let now = CFAbsoluteTimeGetCurrent()
+            guard connections[id] != nil, now - (keyframeAsked[id] ?? 0) >= 1 else { return }
+            keyframeAsked[id] = now
+            encoderBox.current?.requestKeyframe()
         case .clipboard:
             // The clipboard (HostClipboard): a subscription, a device's text, or its stop. No `await`:
             // it reads and writes the pasteboard at once, and says nothing per copy.
@@ -1052,7 +1066,8 @@ package final class StreamCoordinator {
             print("Desktop screen: \(catalog.displayInfos.first { $0.id == catalog.display?.displayID }?.name ?? "?") (picked \(pick.displayID))")
             if active == .desktop { await select(.desktop) }
             broadcastList()
-        case .watchTranscript, .sessionReply, .watchTerminal, .terminalInput, .activateTab, .pushRegistration:
+        case .watchTranscript, .sessionReply, .watchTerminal, .terminalInput, .activateTab, .pushRegistration,
+             .terminalView, .sessionSearch:
             // Porthole: only from a device whose catalog went out (admitted, paired where pairing is
             // required): a reply types into a terminal.
             guard connections[ObjectIdentifier(connection)] != nil else { return }

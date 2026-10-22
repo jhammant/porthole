@@ -501,6 +501,10 @@ struct PortraitStreamScreen: View {
                 .overlay { if client.demo, let image = PortholeDemo.picture(for: client.active) {
                     Image(uiImage: image).resizable().aspectRatio(contentMode: .fit)
                 } }
+                // Porthole: the picked window's thumbnail until its first frame lands (StreamClient.switchingTo).
+                .overlay { if let thumb = client.switchingTo {
+                    Image(uiImage: thumb).resizable().aspectRatio(contentMode: .fit).blur(radius: 1.5).transition(.opacity)
+                } }
             InputOverlay(videoSize: client.videoSize,
                          send: { client.sendInput($0) },
                          setOwnPointer: { client.setOwnPointer($0, from: $1) },

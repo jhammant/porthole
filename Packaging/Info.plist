@@ -31,7 +31,7 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>Porthole reads your iTerm2 sessions and types your replies into them, so you can use them from your iPhone or iPad.</string>
+	<string>Porthole reads your iTerm2 sessions and Chrome tabs, and types your replies into iTerm2, so you can use them from your iPhone or iPad.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_porthole._tcp</string>

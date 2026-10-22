@@ -32,6 +32,25 @@ final class PortholeTerminalFeed: @unchecked Sendable {
         var rows = 0
         /// The session's own size before Porthole fitted it to the device, put back when the watch ends.
         var home: (columns: Int, rows: Int)?
+        /// Porthole (22 Oct, the two-finger scroll): the line of the session's history the pane shows first
+        /// (iTerm's numbering), so new output never moves what is being read; nil follows the live screen.
+        var first: Int?
+        /// The find in this session (TerminalView's `find`): its matches, oldest first, and the one shown.
+        var find: Find?
+        /// What the last screen said of the scroll and the find, so a change of either alone still goes out.
+        var sentMeta: Meta?
+    }
+
+    struct Find {
+        var query: String
+        var matches: [(line: Int, column: Int)]
+        var index: Int
+    }
+
+    struct Meta: Equatable {
+        var scrolledUp: Int
+        var history: Int
+        var find: TerminalFind?
     }
     private var watches: [ObjectIdentifier: Watch] = [:]
     private var inputTimes: [ObjectIdentifier: [CFAbsoluteTime]] = [:]
@@ -60,6 +79,13 @@ final class PortholeTerminalFeed: @unchecked Sendable {
             // unless it is the same session, whose home is kept.
             var home = previous?.terminalID == request.terminalID ? previous?.home : nil
             if previous != nil, previous?.terminalID != request.terminalID { self.end(id) }
+            // One own size per session, whoever fitted it first (22 Oct review): a quick reconnect, or a
+            // second device, read the first device's fit as the session's own and left it at that size.
+            if home == nil {
+                self.fittedLock.lock()
+                home = self.fitted[request.terminalID].map { ($0.columns, $0.rows) }
+                self.fittedLock.unlock()
+            }
             if let c = request.fitColumns, let r = request.fitRows {
                 let cols = min(max(c, 40), 300), rows = min(max(r, 10), 120)
                 let before = self.osa.call("resizeto", [String(request.windowID ?? 0), request.terminalID, String(cols), String(rows)])
@@ -69,8 +95,16 @@ final class PortholeTerminalFeed: @unchecked Sendable {
             }
             var w = Watch(connection: connection, terminalID: request.terminalID, windowID: request.windowID)
             w.home = home
+            // The same session again (the pane refitted, the colours changed): its find stays. A refit rewraps
+            // the history, so its matches are found again and the view goes back to live.
+            if previous?.terminalID == request.terminalID, let f = previous?.find {
+                let matches = self.iterm.find(request.terminalID, f.query)?.matches ?? []
+                w.find = Find(query: f.query, matches: matches, index: matches.count - 1)
+            }
             if let home {
-                self.fittedLock.lock(); self.fitted[request.terminalID] = (request.windowID, home.columns, home.rows); self.fittedLock.unlock()
+                self.fittedLock.lock()
+                if self.fitted[request.terminalID] == nil { self.fitted[request.terminalID] = (request.windowID, home.columns, home.rows) }
+                self.fittedLock.unlock()
             }
             self.watches[id] = w
             self.refresh(id)
@@ -78,11 +112,49 @@ final class PortholeTerminalFeed: @unchecked Sendable {
         }
     }
 
+    /// Porthole: where a pane looks in its session's history, and what it finds there (kind 213).
+    func view(_ view: TerminalView, from connection: NWConnection) {
+        queue.async {
+            let id = ObjectIdentifier(connection)
+            guard var w = self.watches[id], w.terminalID == view.terminalID else { return }
+            var scrolledUp: Int?
+            if view.endFind == true {
+                w.find = nil
+            } else if let raw = view.find {
+                let query = String(raw.trimmingCharacters(in: .whitespacesAndNewlines).prefix(PortholeWire.maxSearchQuery))
+                guard !query.isEmpty else { return }
+                let step = max(-1, min(1, view.step ?? 0))
+                if step == 0 || w.find?.query != query {
+                    let found = self.iterm.find(w.terminalID, query)
+                    let matches = found?.matches ?? []
+                    w.find = Find(query: query, matches: matches, index: matches.count - 1)
+                    print("Porthole: find in a terminal, \(matches.count) matches" + (found == nil ? " (no iTerm helper)" : ""))
+                } else if var f = w.find, !f.matches.isEmpty {
+                    let n = f.matches.count
+                    f.index = ((f.index + step) % n + n) % n
+                    w.find = f
+                }
+                // The match shown a third of the way down the pane, or the live screen when it is there.
+                if let f = w.find, f.matches.indices.contains(f.index) {
+                    w.first = f.matches[f.index].line - max(0, w.rows / 3)
+                }
+            } else if let up = view.scrolledUp {
+                w.first = nil
+                scrolledUp = max(0, min(up, 1_000_000))
+            }
+            w.runs = []
+            self.watches[id] = w
+            self.refresh(id, scrolledUp: scrolledUp)
+        }
+    }
+
     func input(_ input: TerminalInput, from connection: NWConnection, arrived: CFAbsoluteTime) {
         queue.async {
             let id = ObjectIdentifier(connection)
             // Only into the terminal this device watches: an id alone never opens a session to typing.
-            guard let w = self.watches[id], w.terminalID == input.terminalID, input.text.utf8.count <= PortholeWire.maxTerminalInput else { return }
+            guard var w = self.watches[id], w.terminalID == input.terminalID, input.text.utf8.count <= PortholeWire.maxTerminalInput else { return }
+            // Typing shows the live screen again, as a terminal does.
+            if w.first != nil { w.first = nil; w.runs = []; self.watches[id] = w }
             var recent = (self.inputTimes[id] ?? []).filter { arrived - $0 < 1 }
             guard recent.count < PortholeWire.terminalInputsPerSecond else { self.inputTimes[id] = recent; return }
             recent.append(arrived)
@@ -143,21 +215,27 @@ final class PortholeTerminalFeed: @unchecked Sendable {
         timer = nil
     }
 
-    private func refresh(_ id: ObjectIdentifier) {
+    private func refresh(_ id: ObjectIdentifier, scrolledUp: Int? = nil) {
         guard var w = watches[id] else { return }
-        if let styled = iterm.screen(w.terminalID) {
+        if let styled = iterm.screen(w.terminalID, first: w.first, scrolledUp: scrolledUp) {
             let full = w.runs.isEmpty || styled.columns != w.columns || styled.rows != w.rows
             var changed: [TerminalLine] = []
             for (row, runs) in styled.lines.enumerated() where full || row >= w.runs.count || w.runs[row] != runs {
                 changed.append(TerminalLine(row: row, runs: runs))
             }
             w.runs = styled.lines; w.columns = styled.columns; w.rows = styled.rows
+            // Scrolled up, the pane keeps its lines as output arrives; at the live screen it follows it.
+            w.first = styled.first < styled.base ? styled.first : nil
+            let meta = Meta(scrolledUp: styled.scrolledUp, history: styled.history, find: Self.found(w.find, in: styled))
+            let metaChanged = meta != w.sentMeta
+            w.sentMeta = meta
             watches[id] = w
-            guard full || !changed.isEmpty else { return }
+            guard full || !changed.isEmpty || metaChanged else { return }
             let message = TerminalScreen(terminalID: w.terminalID, columns: styled.columns, rows: styled.rows,
                                          cursorX: styled.cursorX, cursorY: styled.cursorY,
                                          foreground: iterm.palette.foreground, background: iterm.palette.background,
-                                         lines: changed, full: full)
+                                         lines: changed, full: full, scrolledUp: meta.scrolledUp, history: meta.history,
+                                         find: meta.find)
             server.send(StreamMessage(kind: .terminalScreen, timestamp: Date().timeIntervalSince1970, isKeyframe: false,
                                       payload: Wire.encode(message)), to: w.connection)
             return
@@ -177,6 +255,18 @@ final class PortholeTerminalFeed: @unchecked Sendable {
                                   payload: Wire.encode(message)), to: w.connection)
     }
 
+    /// The find as the device draws it: how many matches, which is shown, and those on this screen.
+    static func found(_ find: Find?, in screen: PortholeITermScreen.Screen) -> TerminalFind? {
+        guard let find else { return nil }
+        let length = find.query.count
+        let hits = find.matches.enumerated().compactMap { i, m -> TerminalFindHit? in
+            let row = m.line - screen.first
+            guard row >= 0, row < screen.rows else { return nil }
+            return TerminalFindHit(row: row, column: m.column, length: length, current: i == find.index)
+        }
+        return TerminalFind(query: find.query, count: find.matches.count, index: find.matches.isEmpty ? 0 : find.index + 1, hits: hits)
+    }
+
     /// The session's visible screen: its size, and its last `rows` lines of text, each cut to `columns`.
     private func read(_ terminalID: String, windowID: UInt32?) -> (columns: Int, rows: Int, lines: [String])? {
         guard let text = osa.call("screenof", [String(windowID ?? 0), terminalID]), !text.isEmpty else { return nil }
@@ -187,9 +277,20 @@ final class PortholeTerminalFeed: @unchecked Sendable {
 
     private func flush(_ terminalID: String) {
         guard let p = pending.removeValue(forKey: terminalID), !p.text.isEmpty else { return }
-        _ = osa.call("typeinto", [String(p.windowID ?? 0), terminalID, p.text])
-        // Show the echo now rather than at the next refresh.
+        // Porthole (22 Oct, "the keyboard seems to lag a bit"): through iTerm's API, a few ms; AppleScript's
+        // write took ~50 ms a key, and stays the way when the helper isn't there.
+        if !iterm.type(p.text, into: terminalID) {
+            _ = osa.call("typeinto", [String(p.windowID ?? 0), terminalID, p.text])
+        }
+        // Show the echo now rather than at the next refresh, and again as Claude Code draws it a frame or two
+        // later (the quarter-second timer alone made a key's echo wait for it).
         for (id, w) in watches where w.terminalID == terminalID { refresh(id) }
+        for delay in [0.04, 0.12] {
+            queue.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self else { return }
+                for (id, w) in self.watches where w.terminalID == terminalID { self.refresh(id) }
+            }
+        }
     }
 }
 

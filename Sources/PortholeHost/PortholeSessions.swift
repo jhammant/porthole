@@ -15,9 +15,17 @@ final class PortholeSessions {
         let pid: Int32
         let sessionId: String
         let cwd: String
-        let name: String
-        let status: String
-        let kind: String
+        // Porthole (22 Oct review): optional, as `claude agents --json` was seen leaving `status` out of one entry,
+        // which emptied the whole list for a tick (and made Anywhere announce every session again).
+        let name: String?
+        let status: String?
+        let kind: String?
+    }
+
+    /// One entry of `claude agents --json`, nil when it doesn't decode, so one odd entry drops only itself.
+    private struct LenientAgent: Decodable {
+        let agent: Agent?
+        init(from decoder: Decoder) throws { agent = try? Agent(from: decoder) }
     }
 
     struct ITermSession {
@@ -46,7 +54,9 @@ final class PortholeSessions {
     // MARK: Snapshot
 
     func snapshot() -> SessionList {
-        let agents = Self.agents(claude: claude)
+        // A failed read of `claude agents` (it timed out, or said something that isn't a list) keeps the last
+        // list rather than an empty one: the sidebar doesn't flicker, and Anywhere doesn't see every session anew.
+        guard let agents = Self.agents(claude: claude) else { return lastSnapshot ?? SessionList(sessions: [], windowOrder: nil) }
         let unknown = agents.map(\.pid).filter { ttyCache[$0] == nil }
         if !unknown.isEmpty { ttyCache.merge(Self.ttys(of: unknown)) { _, new in new } }
         let live = Set(agents.map(\.pid))
@@ -64,10 +74,11 @@ final class PortholeSessions {
             let terminal = ttys[agent.pid].flatMap { byTTY[$0] }
             let model = probe(sessionID: agent.sessionId)
             let place = Self.portal(for: agent.cwd, home: home)
-            let state = model?.state(busy: agent.status == "busy") ?? (agent.status == "busy" ? .working : .idle)
-            let title = model?.title ?? terminal.map { Self.cleanTitle($0.title) }.flatMap { $0.isEmpty ? nil : $0 } ?? agent.name
+            let status = agent.status ?? "idle"
+            let state = model?.state(status: status) ?? (status == "busy" ? .working : status == "waiting" ? .needsYou : .idle)
+            let title = model?.title ?? terminal.map { Self.cleanTitle($0.title) }.flatMap { $0.isEmpty ? nil : $0 } ?? agent.name ?? "Claude Code"
             sessions.append(ClaudeSession(id: agent.sessionId, title: title, portal: place.portal, folder: place.folder,
-                                          state: state, since: model?.tailAt, windowID: terminal?.windowID,
+                                          state: state, since: model?.since(for: state), windowID: terminal?.windowID,
                                           windowNumber: nil, terminalID: terminal?.uniqueID, preview: model?.preview))
         }
         let list = SessionList(sessions: Self.ordered(sessions), windowOrder: Self.frontToBack())
@@ -75,8 +86,11 @@ final class PortholeSessions {
         // Forget the followers of sessions that ended, so a long run does not keep every transcript.
         let ids = Set(agents.map(\.sessionId))
         followers = followers.filter { ids.contains($0.key) }
+        lastSnapshot = list
         return list
     }
+
+    private var lastSnapshot: SessionList?
 
     /// The transcript file of a session, found once (a project folder per working folder).
     func file(for sessionID: String) -> URL? {
@@ -175,9 +189,19 @@ final class PortholeSessions {
         return candidates.compactMap { $0 }.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
-    static func agents(claude: String?) -> [Agent] {
-        guard let claude, let out = run(claude, ["agents", "--json"], timeout: 5) else { return [] }
-        return (try? JSONDecoder().decode([Agent].self, from: out)) ?? []
+    /// Claude Code's sessions; nil when they couldn't be read (no answer in time, not a list), [] when there are none.
+    static func agents(claude: String?) -> [Agent]? {
+        guard let claude else { return [] }
+        guard let out = run(claude, ["agents", "--json"], timeout: 5) else { return nil }
+        return decodeAgents(out)
+    }
+
+    /// `claude agents --json`'s answer: every entry that reads; nil when it isn't a list at all.
+    static func decodeAgents(_ out: Data) -> [Agent]? {
+        guard let entries = try? JSONDecoder().decode([LenientAgent].self, from: out) else { return nil }
+        let agents = entries.compactMap(\.agent)
+        if agents.count < entries.count { print("Porthole: \(entries.count - agents.count) of \(entries.count) entries of claude agents didn't read; left out") }
+        return agents
     }
 
     /// Each pid's controlling terminal as a device path ("/dev/ttys015"); none for `claude --bg`.

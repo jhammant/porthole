@@ -845,9 +845,11 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
             }
             #endif
             let outcome = down ? forwarded.pressed(usage, modifiers: modifiers, at: press.timestamp) : forwarded.released(usage)
+            if !down { stopKeyRepeat(usage) }
             switch outcome {
             case .send(let event):
                 send(event)
+                if down { startKeyRepeat(usage, event) }
                 Self.hwkey(usage, down: down, via: channel, modifiers: modifiers, to: "to the Mac")
             case .text:
                 unhandled.insert(press)
@@ -891,7 +893,37 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     /// panel took the keyboard, the tour showed) or is leaving the screen, and UIKit sends it no
     /// release for them.
     private func releaseForwardedKeys() {
+        stopKeyRepeat()
         for up in forwarded.releaseAll() { send(up) }
+    }
+
+    // MARK: Porthole: held keys repeat
+
+    /// The arrows, delete and the page keys repeat on the Mac while held: a Mac repeats only its own
+    /// keyboard's keys, never a key Porthole posts, and iPadOS repeats only what its text system types
+    /// (22 Oct: "key repeat, especially on delete, doesn't work that well"). The key's down again, at a
+    /// Mac's pace, until its up; the host marks each one a repeat.
+    private var keyRepeat: (usage: UInt16, timer: Timer)?
+    static let repeatingKeys: Set<UInt16> = [0x2A, 0x4C, 0x4F, 0x50, 0x51, 0x52, 0x4B, 0x4E]
+
+    private func startKeyRepeat(_ usage: UInt16, _ event: InputEvent) {
+        stopKeyRepeat()
+        guard Self.repeatingKeys.contains(usage) else { return }
+        let first = Timer.scheduledTimer(withTimeInterval: PortholeTerminalView.repeatDelay, repeats: false) { [weak self] _ in
+            guard let self, self.keyRepeat?.usage == usage else { return }
+            self.send(event)
+            let again = Timer.scheduledTimer(withTimeInterval: PortholeTerminalView.repeatInterval, repeats: true) { [weak self] _ in
+                self?.send(event)
+            }
+            self.keyRepeat = (usage, again)
+        }
+        keyRepeat = (usage, first)
+    }
+
+    private func stopKeyRepeat(_ usage: UInt16? = nil) {
+        guard let r = keyRepeat, usage == nil || r.usage == usage else { return }
+        r.timer.invalidate()
+        keyRepeat = nil
     }
 }
 

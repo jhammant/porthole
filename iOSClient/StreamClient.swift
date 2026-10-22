@@ -254,6 +254,9 @@ final class StreamClient: ObservableObject {
         }
     }
     @Published var thumbnails: [UInt32: UIImage] = [:] // by window ID
+    /// Porthole: the picked window's thumbnail, shown over the picture until its stream's first frame.
+    @Published var switchingTo: UIImage?
+    var lastKeyframeAsk: CFAbsoluteTime = 0
     @Published var icons: [String: UIImage] = [:]      // by bundle ID
     @Published var apps: [AppInfo] = []                // installed apps, for "All apps"
 
@@ -444,6 +447,8 @@ final class StreamClient: ObservableObject {
     private(set) lazy var displayView: HEVCDisplayView = {
         let view = HEVCDisplayView(frame: .zero)
         view.onVideoSize = { [weak self] size in self?.videoSize = size }
+        view.onNeedsKeyframe = { [weak self] in self?.requestKeyframe() }
+        view.onPictureShown = { [weak self] in self?.switchingTo = nil }
         onParameterSets = { ps in view.apply(ps) }
         onFrame = { data, isKey in view.enqueue(data, isKeyframe: isKey) }
         return view
@@ -921,6 +926,8 @@ final class StreamClient: ObservableObject {
         NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
             self?.resetLiveness()
             self?.cameForward()
+            // Porthole: the picture may have been dropped in the background; the Mac's keyframes are a minute apart.
+            self?.requestKeyframe()
         }
         NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
             self?.appInForeground = false
@@ -3187,7 +3194,22 @@ final class StreamClient: ObservableObject {
     /// answers with a fresh window list. It counts for the tour as something happening.
     func select(_ source: StreamSource) {
         noteAction()
+        // Porthole (22 Oct review): the window's thumbnail over the picture until its first frame lands, so a
+        // switch shows something within a frame of the tap instead of black for the Mac's 0.3–0.6 s.
+        if source != active, case .window(let id) = source, let thumb = thumbnails[id] {
+            switchingTo = thumb
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                if self?.switchingTo === thumb { self?.switchingTo = nil }
+            }
+        }
         request(source)
+    }
+
+    /// Porthole: asks the Mac for a keyframe (kind 216), at most once a second.
+    func requestKeyframe() {
+        guard connected, !demo, CFAbsoluteTimeGetCurrent() - lastKeyframeAsk >= 1 else { return }
+        lastKeyframeAsk = CFAbsoluteTimeGetCurrent()
+        send(.keyframeRequest, payload: Data())
     }
 
     /// Asks the host to stream this source: the person's pick (`select`), or this device's own
@@ -3810,7 +3832,7 @@ final class StreamClient: ObservableObject {
                 guard self.connection === from else { return }
                 self.receiveMenus(menu)
             }
-        case .claudeSessions, .transcript, .replyResult, .terminalScreen, .browserTabs, .portholeNotice:
+        case .claudeSessions, .transcript, .replyResult, .terminalScreen, .browserTabs, .portholeNotice, .sessionSearchResults:
             // Porthole (StreamClient+Porthole.swift), on the main queue, for this connection only.
             let from = connection
             DispatchQueue.main.async {

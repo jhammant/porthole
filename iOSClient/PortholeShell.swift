@@ -23,11 +23,15 @@ struct PortholeShell: View {
     static let topBarHiddenKey = "Porthole.topBarHidden"
     /// Sessions open as text (their iTerm screen in its own colours, docs/agent-view-plan.md) rather than
     /// as the streamed window: the Text | Window switch over a session, or ⌃⌥T. Kept across launches.
-    @AppStorage("Porthole.sessionsAsText") private var sessionsAsText = false
+    @AppStorage("Porthole.sessionsAsText") private var sessionsAsText = UIDevice.current.userInterfaceIdiom == .phone
     /// In text, the agent view beside the session, as two panes (21 Oct, the TUI options: "text by default
     /// with the agent view beside sessions").
     @AppStorage("Porthole.agentBeside") private var agentBeside = false
     @State private var dragStart: Double?
+    /// Bumped by ⌃⌥/ to put the keyboard in the sidebar's search.
+    @State private var searchFocus = 0
+    /// A notification's session, tapped before the session list had it.
+    @State private var notifiedSession: String?
     @Environment(\.duoEnvironment) private var duoEnvironment
     @Environment(\.horizontalSizeClass) private var widthClass
 
@@ -47,7 +51,8 @@ struct PortholeShell: View {
                         if sidebarShown {
                             PortholeSidebar(client: client, pick: pick, open: open, onTiles: { tilePickerShown = true },
                                             onNext: { handle(.nextWindow) },
-                            sessionsMode: !sessionsAsText ? .window : agentBeside ? .textWithAgent : .text, setMode: setSessionsMode)
+                            sessionsMode: !sessionsAsText ? .window : agentBeside ? .textWithAgent : .text, setMode: setSessionsMode,
+                            searchFocus: searchFocus, openSearchHit: openSearchHit)
                                 .frame(width: sidebarFrame(geo.size, posture))
                         }
                         divider(geo.size, posture).zIndex(1)
@@ -63,8 +68,10 @@ struct PortholeShell: View {
         }
         .background(PortholeStyle.ground.ignoresSafeArea())
         // No status bar over the sidebar's first row: iPadOS drew it there without a safe area (Info.plist
-        // asks for none), and Jon wants no room wasted.
-        .statusBarHidden(true)
+        // asks for none), and Jon wants no room wasted. An iPhone keeps its clock and battery.
+        .statusBarHidden(widthClass != .compact)
+        // A session came to need Jon: a tap on the wrist of the device, wherever he is in Porthole.
+        .sensoryFeedback(.warning, trigger: client.porthole.needsYou.count) { old, new in new > old }
         .sheet(isPresented: $pro.paywallShown) { PortholeProSheet() }
         // The hidden matrix mode's way in (PortholeMatrix).
         .overlay { if let at = matrix.introAt { PortholeMatrixIntro(start: at) } }
@@ -75,9 +82,15 @@ struct PortholeShell: View {
         .onAppear {
             PortholeHotKeys.handler = { action in handle(action) }
             // Porthole Anywhere: a tapped notification opens its session; the Mac gets this device's token.
-            anywhere.openSession = { id in if client.porthole.session(id) != nil { open(.session(id)) } }
+            // A session not listed yet (the app just started from the notification) opens when the list has it.
+            anywhere.openSession = { id in
+                if client.porthole.session(id) != nil { open(.session(id)) } else { notifiedSession = id }
+            }
             if let id = anywhere.takePendingSession() { anywhere.openSession?(id) }
             if let r = anywhere.registration { client.sendPushRegistration(r) }
+        }
+        .onChange(of: client.porthole.sessions) { _, list in
+            if let id = notifiedSession, list.contains(where: { $0.id == id }) { notifiedSession = nil; open(.session(id)) }
         }
         .onChange(of: anywhere.registration) { _, r in if let r { client.sendPushRegistration(r) } }
         .onChange(of: client.connected) { _, up in if up, let r = anywhere.registration { client.sendPushRegistration(r) } }
@@ -94,6 +107,8 @@ struct PortholeShell: View {
             let named = client.porthole.sessions.first { $0.folder.localizedCaseInsensitiveContains(how) || $0.title.localizedCaseInsensitiveContains(how) }
             let s = how == "needs" ? (client.porthole.needsYou.first ?? client.porthole.sessions.first)
                 : how == "first" ? client.porthole.sessions.first : named
+            // -PortholeFind WORDS: the session opens as text at its words (the pane's find, as a search hit does).
+            if let s, let q = UserDefaults.standard.string(forKey: "PortholeFind"), let t = s.terminalID { client.porthole.pendingFind[t] = q }
             if let s { open(.session(s.id)) }
         }
         // -PortholeTiles 2|4: tile the most recent windows a few seconds after connecting (simulator runs;
@@ -137,7 +152,7 @@ struct PortholeShell: View {
                 // double-tapping it ("not good enough", 20 Oct): a tab on the edge, tapped or pulled.
                 .overlay(alignment: .leading) {
                     if !sidebarShown {
-                        PortholeSidebarTab()
+                        PortholeSidebarTab(needsYou: client.porthole.needsYou.count)
                             .gesture(dividerDrag(size))
                             .onTapGesture { withAnimation(.easeOut(duration: 0.18)) { sidebarShown = true } }
                     }
@@ -183,6 +198,15 @@ struct PortholeShell: View {
         }
     }
 
+    /// What the narrow layout's bar says over the detail: the session, the agent view, or nothing.
+    private var pickTitle: String {
+        switch pick {
+        case .session(let id): return client.porthole.session(id)?.title ?? ""
+        case .agentView: return "Agent view"
+        case .apps: return ""
+        }
+    }
+
     /// The host's terminal id for Claude Code's agent view (PortholeAgentViews on the Mac).
     static let agentViewID = "agent-view"
 
@@ -207,10 +231,12 @@ struct PortholeShell: View {
         NavigationStack(path: $compactPath) {
             PortholeSidebar(client: client, pick: pick, open: open, onTiles: { tilePickerShown = true },
                             onNext: { handle(.nextWindow) },
-                            sessionsMode: !sessionsAsText ? .window : agentBeside ? .textWithAgent : .text, setMode: setSessionsMode)
+                            sessionsMode: !sessionsAsText ? .window : agentBeside ? .textWithAgent : .text, setMode: setSessionsMode,
+                            searchFocus: searchFocus, openSearchHit: openSearchHit)
                 .toolbar(.hidden, for: .navigationBar)
                 .navigationDestination(for: PortholePick.self) { _ in
                     detail.navigationBarTitleDisplayMode(.inline)
+                        .navigationTitle(pickTitle)
                 }
         }
         .onChange(of: compactPath) { _, path in if path.isEmpty { pick = .apps } }
@@ -320,7 +346,18 @@ struct PortholeShell: View {
             withAnimation(.easeOut(duration: 0.18)) { topBarHidden.toggle() }
         case .switcher:
             switcherShown.toggle()
+        case .searchSessions:
+            // The sidebar's search, in sight and with the keyboard.
+            if !sidebarShown { withAnimation(.easeOut(duration: 0.18)) { sidebarShown = true } }
+            compactPath = []
+            searchFocus += 1
         }
+    }
+
+    /// A search result tapped: its session opens; as text, at the words (the pane's find).
+    private func openSearchHit(_ sessionID: String, _ query: String) {
+        if sessionsAsText, let t = client.porthole.session(sessionID)?.terminalID { client.porthole.pendingFind[t] = query }
+        open(.session(sessionID))
     }
 }
 
@@ -348,17 +385,27 @@ struct PortholeDivider: View {
 
 /// The hidden sidebar's handle on the left edge: tap to show the sidebar, or pull it out.
 struct PortholeSidebarTab: View {
+    /// Sessions that need Jon, shown on the tab while the sidebar is hidden (22 Oct review: nothing said so).
+    var needsYou = 0
+
     var body: some View {
         Image(systemName: "chevron.compact.right")
             .font(PortholeType.ui(18, .semibold))
             .foregroundStyle(PortholeStyle.text)
             .frame(width: 22, height: 72)
             .background(PortholeStyle.panel, in: UnevenRoundedRectangle(bottomTrailingRadius: 10, topTrailingRadius: 10))
-            .overlay(UnevenRoundedRectangle(bottomTrailingRadius: 10, topTrailingRadius: 10).stroke(PortholeStyle.line))
+            .overlay(UnevenRoundedRectangle(bottomTrailingRadius: 10, topTrailingRadius: 10).stroke(needsYou > 0 ? PortholeStyle.brass : PortholeStyle.line))
+            .overlay(alignment: .top) {
+                if needsYou > 0 {
+                    Text("\(needsYou)").font(PortholeType.ui(10.5, .bold, mono: true)).foregroundStyle(.black)
+                        .frame(minWidth: 16, minHeight: 16).background(PortholeStyle.brass, in: Capsule())
+                        .offset(x: 2, y: -6)
+                }
+            }
             .frame(width: 44, height: 96, alignment: .leading)
             .contentShape(Rectangle())
             .accessibilityElement()
-            .accessibilityLabel("Show sidebar")
+            .accessibilityLabel(needsYou > 0 ? "Show sidebar, \(needsYou) \(needsYou == 1 ? "session needs" : "sessions need") you" : "Show sidebar")
             .accessibilityAddTraits(.isButton)
     }
 }
@@ -492,14 +539,27 @@ struct PortholeSidebar: View {
     @AppStorage(PortholeType.themeKey) private var tuiTheme = false
     /// Text modes in dark or light colours (StreamClient.textColours).
     @AppStorage(StreamClient.textColoursKey) private var textColours = "dark"
+    /// Porthole (22 Oct, "a search on the claude code windows, and between them all"): words across every
+    /// session's whole conversation; ⌃⌥/ puts the keyboard here (`searchFocus` bumped).
+    var searchFocus = 0
+    var openSearchHit: (_ sessionID: String, _ query: String) -> Void = { _, _ in }
+    @State private var searchText = ""
+    @State private var searchTyping: Task<Void, Never>?
+    @FocusState private var searchFocused: Bool
+
+    private var searching: Bool { searchText.trimmingCharacters(in: .whitespaces).count >= PortholeWire.minSessionSearch }
 
     var body: some View {
         let sessions = client.porthole.sessions
         VStack(spacing: 0) {
             header.padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 8)
+            searchField.padding(.horizontal, 10).padding(.bottom, 6)
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2) {
+                      if searching {
+                        searchResults
+                      } else {
                         agentViewRow
                         PortholeTextSwitch(mode: sessionsMode, set: setMode)
                         PortholeColoursSwitch(colours: textColours) { c in
@@ -518,8 +578,11 @@ struct PortholeSidebar: View {
                         favouritesSection
                         appsSection
                         proRow
+                        proAndAnywhereRow
                         keysHint
+                      }
                     }
+                    .id(searching ? "search" : "list")
                     .padding(.horizontal, 10).padding(.bottom, 12)
                 }
                 // Keep what streams in view as ⌃⌥↓ walks down the list.
@@ -531,6 +594,110 @@ struct PortholeSidebar: View {
         }
         .background(ZStack { PortholeStyle.panel; if matrix.on { PortholeMatrixRain(opacity: 0.22) } })
         .sheet(isPresented: $allAppsShown) { PortholeAllApps(client: client, shown: $allAppsShown) }
+        .onChange(of: searchFocus) { _, _ in searchFocused = true }
+        #if DEBUG
+        // -PortholeSearch WORDS: the sidebar's search, typed (simulator runs).
+        .onAppear { if let q = UserDefaults.standard.string(forKey: "PortholeSearch") { searchText = q } }
+        #endif
+        .onChange(of: searchText) { _, text in
+            searchTyping?.cancel()
+            searchTyping = Task {
+                try? await Task.sleep(for: .milliseconds(300))
+                guard !Task.isCancelled else { return }
+                client.searchSessions(text)
+            }
+        }
+    }
+
+    // MARK: Search across sessions
+
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").font(PortholeType.ui(13)).foregroundStyle(PortholeStyle.muted)
+            TextField("", text: $searchText, prompt: Text("Search all sessions").foregroundStyle(PortholeStyle.muted))
+                .font(PortholeType.ui(13.5)).foregroundStyle(PortholeStyle.text)
+                .textFieldStyle(.plain).autocorrectionDisabled().textInputAutocapitalization(.never)
+                .submitLabel(.search).focused($searchFocused)
+                .onSubmit { searchTyping?.cancel(); client.searchSessions(searchText) }
+                .onKeyPress(.escape) { searchText = ""; searchFocused = false; return .handled }
+            if !searchText.isEmpty {
+                Button { searchText = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(PortholeStyle.muted) }
+                    .buttonStyle(.plain).accessibilityLabel("Clear the search")
+            } else {
+                Text("⌃⌥/").font(PortholeType.ui(11.5, mono: true)).foregroundStyle(PortholeStyle.muted)
+            }
+        }
+        .padding(.horizontal, 10).frame(height: 34)
+        .background(PortholeStyle.field, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(searchFocused ? PortholeStyle.blue.opacity(0.6) : PortholeStyle.line))
+    }
+
+    @ViewBuilder private var searchResults: some View {
+        let search = client.porthole.search
+        let query = searchText.trimmingCharacters(in: .whitespaces)
+        if search.results.isEmpty {
+            Text(search.searching || search.query != query ? "Searching…" : "Nothing in your sessions says “\(query)”")
+                .font(PortholeType.ui(13)).foregroundStyle(PortholeStyle.muted)
+                .padding(.horizontal, 8).padding(.top, 12)
+        } else {
+            Text("\(search.results.count) \(search.results.count == 1 ? "session" : "sessions") · newest first")
+                .font(PortholeType.ui(11, .semibold)).foregroundStyle(PortholeStyle.label)
+                .padding(.horizontal, 6).padding(.top, 6).padding(.bottom, 2)
+            // Ids of their own: the list's rows use the session ids, and a lazy stack reused those rows here.
+            ForEach(search.results, id: \.searchRowID) { found in searchGroup(found, query: search.query) }
+        }
+    }
+
+    private func searchGroup(_ found: SessionSearchHits, query: String) -> some View {
+        let s = client.porthole.session(found.sessionID)
+        return VStack(alignment: .leading, spacing: 2) {
+            Button { openSearchHit(found.sessionID, query) } label: {
+                HStack(spacing: 9) {
+                    if let s { PortholeStateDot(state: s.state) }
+                    Text(s?.title ?? "A session that has ended").font(PortholeType.ui(13.5, .medium))
+                        .foregroundStyle(PortholeStyle.text).lineLimit(1)
+                    Spacer(minLength: 6)
+                    Text(found.count >= PortholeWire.searchMatchesPerSession ? "\(found.count)+" : "\(found.count)")
+                        .font(PortholeType.ui(11, mono: true)).foregroundStyle(PortholeStyle.muted)
+                }
+                .padding(.horizontal, 8).padding(.top, 8).padding(.bottom, 2).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            ForEach(Array(found.hits.enumerated()), id: \.offset) { _, hit in
+                Button { openSearchHit(found.sessionID, query) } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 7) {
+                        Image(systemName: hit.role == .you ? "person.fill" : hit.role == .tool ? "wrench.adjustable" : "sparkle")
+                            .font(PortholeType.ui(10)).foregroundStyle(hit.role == .you ? PortholeStyle.blue : PortholeStyle.brass)
+                            .frame(width: 14)
+                        Text(Self.marked(hit.snippet, query)).font(PortholeType.ui(12)).foregroundStyle(PortholeStyle.soft)
+                            .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                        if let w = PortholeStyle.waited(hit.at) {
+                            Text(w).font(PortholeType.ui(10.5, mono: true)).foregroundStyle(PortholeStyle.muted)
+                        }
+                    }
+                    .padding(.horizontal, 8).padding(.vertical, 4).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(hit.role == .you ? "You" : "Claude"): \(hit.snippet)")
+            }
+        }
+        .padding(.bottom, 4)
+        .background(pick.sessionID == found.sessionID ? PortholeStyle.field : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    /// The snippet with every place the words are in bold and bright.
+    static func marked(_ text: String, _ query: String) -> AttributedString {
+        var a = AttributedString(text)
+        guard !query.isEmpty else { return a }
+        var from = text.startIndex
+        while let r = text.range(of: query, options: [.caseInsensitive, .diacriticInsensitive], range: from..<text.endIndex) {
+            if let lower = AttributedString.Index(r.lowerBound, within: a), let upper = AttributedString.Index(r.upperBound, within: a) {
+                a[lower..<upper].foregroundColor = PortholeStyle.text
+                a[lower..<upper].inlinePresentationIntent = .stronglyEmphasized
+            }
+            from = r.upperBound
+        }
+        return a
     }
 
     /// One row: the Mac, and Next window, always in sight with its key.
@@ -547,9 +714,10 @@ struct PortholeSidebar: View {
             Spacer(minLength: 6)
             Button(action: onNext) {
                 HStack(spacing: 6) {
-                    Text("Next window").font(PortholeType.ui(12.5, .medium))
+                    Text("Next window").font(PortholeType.ui(12.5, .medium)).lineLimit(1)
                     Text("⌃⌥↓").font(PortholeType.ui(11.5, mono: true)).foregroundStyle(PortholeStyle.muted)
                 }
+                .fixedSize()
                 .padding(.horizontal, 10).frame(height: 30)
                 .background(PortholeStyle.field, in: RoundedRectangle(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(PortholeStyle.line))
@@ -605,9 +773,26 @@ struct PortholeSidebar: View {
         .accessibilityLabel(pro.unlocked ? "Terminal theme, \(tuiTheme ? "on" : "off")" : "Terminal theme, a Porthole Pro feature")
     }
 
+    /// The Pro sheet, which also holds Porthole Anywhere, whatever Pro's state: unlocked, the Terminal theme
+    /// row no longer opened it, so Anywhere couldn't be bought, tested or restored (22 Oct review).
+    private var proAndAnywhereRow: some View {
+        Button { pro.paywallShown = true } label: {
+            HStack(spacing: 11) {
+                Image(systemName: "bell.badge").font(PortholeType.ui(15)).frame(width: 24, height: 24)
+                Text("Pro & Anywhere").font(PortholeType.ui(13.5))
+                Spacer()
+                Image(systemName: "chevron.right").font(PortholeType.ui(11, .semibold)).foregroundStyle(PortholeStyle.muted)
+            }
+            .foregroundStyle(PortholeStyle.soft)
+            .padding(.horizontal, 12).padding(.vertical, 7)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     /// The keys worth knowing, at the foot of the list; holding ⌘ shows every one (PortholeKeyCommands).
     private var keysHint: some View {
-        Text("⌃⌥↓ ↑ next or previous window · ⌃⌥← → back or forward · ⌃⌥V agent view · ⌃⌥Space find · hold ⌘ for every key")
+        Text("⌃⌥↓ ↑ next or previous window · ⌃⌥← → back or forward · ⌃⌥V agent view · ⌃⌥Space find · ⌃⌥/ search · hold ⌘ for every key")
             .font(PortholeType.ui(11)).foregroundStyle(PortholeStyle.muted)
             .padding(.top, 16).padding(.horizontal, 6)
     }
@@ -629,7 +814,8 @@ struct PortholeSidebar: View {
         let selected = pick.sessionID == s.id
         let needs = s.state == .needsYou
         let windowless = s.windowID == nil
-        return Button { open(.session(s.id)) } label: {
+        // A background session has no window: it lives in the agent view, which opens instead (22 Oct review).
+        return Button { open(windowless ? .agentView : .session(s.id)) } label: {
             HStack(alignment: .top, spacing: 11) {
                 PortholeStateDot(state: s.state).padding(.top, needs ? 5 : 4)
                 VStack(alignment: .leading, spacing: 3) {
@@ -641,7 +827,7 @@ struct PortholeSidebar: View {
                             Text(w).font(PortholeType.ui(11, mono: true)).foregroundStyle(PortholeStyle.brass)
                         }
                     }
-                    Text(windowless ? "\(s.portal) · runs in the background, no window" : s.portal)
+                    Text(windowless ? "\(s.portal) · in the background · opens the agent view" : s.portal)
                         .font(PortholeType.ui(11.5)).foregroundStyle(PortholeStyle.muted)
                     if needs, let p = s.preview {
                         Text(p).font(PortholeType.ui(12.5)).foregroundStyle(PortholeStyle.soft).lineLimit(2)
@@ -656,8 +842,6 @@ struct PortholeSidebar: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(windowless)
-        .opacity(windowless ? 0.55 : 1)
         .accessibilityLabel("\(s.title), \(s.portal), \(Self.stateWords(s))")
     }
 
@@ -1027,4 +1211,9 @@ struct PortholeColoursSwitch: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Text colours, dark or light")
     }
+}
+
+extension SessionSearchHits {
+    /// The sidebar's id for a search result's group, apart from the session's own row.
+    var searchRowID: String { "search:" + sessionID }
 }

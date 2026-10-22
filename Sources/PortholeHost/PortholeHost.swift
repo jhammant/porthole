@@ -84,6 +84,7 @@ final class PortholeHost: @unchecked Sendable {
             self.watches[id] = nil
             self.waiting[id] = nil
             self.replyTimes[id] = nil
+            self.latestSearch[id] = nil
             self.held.removeAll { ObjectIdentifier($0.connection) == id }
             if self.connections.isEmpty { self.stop() }
         }
@@ -109,6 +110,12 @@ final class PortholeHost: @unchecked Sendable {
         case .pushRegistration:
             if let r = Wire.decode(PushRegistration.self, from: message.payload) { anywhere.register(r, from: connection) }
             return
+        case .terminalView:
+            // Porthole: a text pane's scroll and find (the agent view has no history to scroll).
+            guard let view = Wire.decode(TerminalView.self, from: message.payload),
+                  view.terminalID != PortholeAgentViews.terminalID else { return }
+            terminals.view(view, from: connection)
+            return
         case .terminalInput:
             guard let input = Wire.decode(TerminalInput.self, from: message.payload) else { return }
             if input.terminalID == PortholeAgentViews.terminalID { agentViews.input(input, from: connection) }
@@ -125,6 +132,9 @@ final class PortholeHost: @unchecked Sendable {
             case .sessionReply:
                 guard let reply = Wire.decode(SessionReply.self, from: message.payload) else { return }
                 self.reply(reply, from: connection, arrived: arrived)
+            case .sessionSearch:
+                guard let request = Wire.decode(SessionSearch.self, from: message.payload) else { return }
+                self.search(request, from: connection)
             case .activateTab:
                 guard let request = Wire.decode(ActivateTab.self, from: message.payload) else { return }
                 if !PortholeBrowser.activate(request, in: self.browser, self.browserOSA) { print("Porthole: that Chrome tab wasn't found") }
@@ -135,10 +145,34 @@ final class PortholeHost: @unchecked Sendable {
         }
     }
 
+    // MARK: Search
+
+    /// Searches run one at a time on a queue of their own, so the session feed never waits on one; a device's
+    /// newer search makes its older one, still waiting, go unanswered.
+    private let searchQueue = DispatchQueue(label: "porthole.search", qos: .userInitiated)
+    private var latestSearch: [ObjectIdentifier: Int] = [:]
+
+    /// Words across every listed session (kind 214), answered to the asking device (215). On `queue`.
+    private func search(_ request: SessionSearch, from connection: NWConnection) {
+        let id = ObjectIdentifier(connection)
+        latestSearch[id] = request.id
+        let list = lastList ?? refreshList(broadcast: false)
+        let sources = list.sessions.compactMap { s in sessions.file(for: s.id).map { PortholeSearch.Source(sessionID: s.id, url: $0) } }
+        searchQueue.async { [weak self] in
+            guard let self, self.queue.sync(execute: { self.latestSearch[id] == request.id }) else { return }
+            let t0 = CFAbsoluteTimeGetCurrent()
+            let found = PortholeSearch.search(request.query, in: sources)
+            print(String(format: "Porthole: search across %d sessions, %d matched (%.0f ms)", sources.count, found.count,
+                         (CFAbsoluteTimeGetCurrent() - t0) * 1000))
+            self.server.send(Self.message(.sessionSearchResults, SessionSearchResults(id: request.id, query: request.query, sessions: found)),
+                             to: connection)
+        }
+    }
+
     /// Screen capture didn't start or stopped with an error: every device is told, in plain words.
     func captureProblem(_ error: Error) {
         let detail = (error as NSError).localizedDescription
-        let text = "Your Mac couldn’t capture the screen (\(detail)). It may be waiting for Allow on a screen-recording prompt: click it on the Mac or through Jump Desktop. Chat and Terminal still work."
+        let text = "Your Mac couldn’t capture the screen (\(detail)). It may be waiting for Allow on a screen-recording prompt, which macOS asks from time to time: click Allow on the Mac. Sessions as text still work."
         server.broadcast(Self.message(.portholeNotice, PortholeNotice(kind: .captureBlocked, text: text)))
         captureNoticeShown = true
     }

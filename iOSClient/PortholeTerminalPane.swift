@@ -15,16 +15,113 @@ struct PortholeTerminalPane: View {
     var windowID: UInt32? = nil
     var title: String = "Agent view"
 
+    /// Porthole (22 Oct): the find bar over the pane, and what it looks for.
+    @State private var findShown = false
+    @State private var findText = ""
+    @State private var findTyping: Task<Void, Never>?
+    @FocusState private var findFocused: Bool
+
+    private var state: PortholeTerminalState? { client.porthole.terminals[terminalID] }
+    /// A session's pane scrolls and finds; the agent view's has no history.
+    private var searchable: Bool { terminalID != PortholeShell.agentViewID }
+
     var body: some View {
         GeometryReader { geo in
-            PortholeTerminalRepresentable(client: client, terminalID: terminalID, size: geo.size)
-                .onAppear { client.openTerminalPane(terminalID); watch(geo.size) }
+            PortholeTerminalRepresentable(client: client, terminalID: terminalID, size: geo.size, openFind: { openFind() })
+                .onAppear {
+                    client.openTerminalPane(terminalID)
+                    watch(geo.size)
+                    // A search result tapped: the pane opens at its words.
+                    if let q = client.porthole.pendingFind.removeValue(forKey: terminalID) { findText = q; findShown = true; client.findInTerminal(terminalID, q) }
+                }
                 .onChange(of: geo.size) { _, size in watch(size) }
                 .overlay { if matrix.on { PortholeMatrixRain(opacity: 0.16) } }
+                .overlay(alignment: .top) { if findShown { findBar } }
+                .overlay(alignment: .topTrailing) {
+                    if searchable, !findShown {
+                        Button { openFind() } label: {
+                            Image(systemName: "magnifyingglass").font(.system(size: 13, weight: .semibold))
+                                .frame(width: 30, height: 30)
+                                .background(.ultraThinMaterial, in: Circle())
+                        }
+                        .buttonStyle(.plain).foregroundStyle(.secondary).padding(6)
+                        .accessibilityLabel("Find in this session")
+                    }
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    if let up = state?.scrolledUp, up > 0 {
+                        Button { client.scrollTerminal(terminalID, to: 0) } label: {
+                            Label("\(up) lines up · Live", systemImage: "arrow.down.to.line")
+                                .font(.caption.weight(.semibold)).padding(.horizontal, 12).padding(.vertical, 7)
+                                .background(.ultraThinMaterial, in: Capsule())
+                        }
+                        .buttonStyle(.plain).padding(10)
+                        .accessibilityLabel("Back to the live screen, \(up) lines up")
+                    }
+                }
+                .onChange(of: client.porthole.pendingFind[terminalID]) { _, q in
+                    guard let q else { return }
+                    client.porthole.pendingFind[terminalID] = nil
+                    findText = q; findShown = true
+                    client.findInTerminal(terminalID, q)
+                }
         }
-        .background(Color(rgb: client.porthole.terminals[terminalID]?.background ?? 0))
+        .background(Color(rgb: state?.background ?? 0))
         .onDisappear { client.closeTerminalPane(terminalID) }
         .accessibilityLabel(title)
+    }
+
+    private func openFind() {
+        guard searchable else { return }
+        withAnimation(.easeOut(duration: 0.15)) { findShown = true }
+        findFocused = true
+    }
+
+    private func closeFind() {
+        findTyping?.cancel()
+        withAnimation(.easeOut(duration: 0.15)) { findShown = false }
+        findFocused = false
+        client.endFind(terminalID)
+    }
+
+    /// Words, how many matches and which is shown, older and newer, and Done.
+    private var findBar: some View {
+        let find = state?.find
+        return HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Find in this session", text: $findText)
+                .textFieldStyle(.plain).autocorrectionDisabled().textInputAutocapitalization(.never)
+                .focused($findFocused)
+                .submitLabel(.search)
+                .onSubmit {
+                    // Return: the match before (up, older), as a new find when the words changed.
+                    client.findInTerminal(terminalID, findText, step: find?.query == findText.trimmingCharacters(in: .whitespaces) ? -1 : 0)
+                    findFocused = true
+                }
+                .onChange(of: findText) { _, text in
+                    findTyping?.cancel()
+                    findTyping = Task {
+                        try? await Task.sleep(for: .milliseconds(350))
+                        guard !Task.isCancelled else { return }
+                        client.findInTerminal(terminalID, text)
+                    }
+                }
+                .onKeyPress(.escape) { closeFind(); return .handled }
+            if let find, !find.query.isEmpty {
+                Text(find.count == 0 ? "No matches" : "\(find.index) of \(find.count)")
+                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary).fixedSize()
+            }
+            Button { client.findInTerminal(terminalID, findText, step: -1) } label: { Image(systemName: "chevron.up") }
+                .accessibilityLabel("Earlier match").disabled((find?.count ?? 0) == 0)
+            Button { client.findInTerminal(terminalID, findText, step: 1) } label: { Image(systemName: "chevron.down") }
+                .accessibilityLabel("Later match").disabled((find?.count ?? 0) == 0)
+            Button("Done") { closeFind() }.font(.callout.weight(.semibold))
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(8)
+        .transition(.move(edge: .top).combined(with: .opacity))
     }
 
     private func watch(_ size: CGSize) {
@@ -62,10 +159,13 @@ private struct PortholeTerminalRepresentable: UIViewRepresentable {
     @ObservedObject private var matrix = PortholeMatrix.shared
     let terminalID: String
     let size: CGSize
+    var openFind: () -> Void = {}
 
     func makeUIView(context: Context) -> PortholeTerminalView {
         let view = PortholeTerminalView()
         view.send = { [weak client] text in client?.sendTerminal(text, to: terminalID) }
+        view.scroll = { [weak client] lines in client?.scrollTerminal(terminalID, to: lines) }
+        view.openFind = openFind
         // With a hardware keyboard the pane takes its keys at once; without, a tap brings the software
         // keyboard up, rather than it covering half the screen as the pane opens.
         if HardwareKeyboardMonitor.shared.attached { DispatchQueue.main.async { view.becomeFirstResponder() } }
@@ -74,6 +174,7 @@ private struct PortholeTerminalRepresentable: UIViewRepresentable {
 
     func updateUIView(_ view: PortholeTerminalView, context: Context) {
         view.send = { [weak client] text in client?.sendTerminal(text, to: terminalID) }
+        view.openFind = openFind
         view.matrix = matrix.on
         if let state = client.porthole.terminals[terminalID] { view.show(state) }
     }
@@ -82,6 +183,10 @@ private struct PortholeTerminalRepresentable: UIViewRepresentable {
 /// The grid itself: draws the screen and takes the keyboard.
 final class PortholeTerminalView: UIView, UIKeyInput {
     var send: (String) -> Void = { _ in }
+    /// Porthole (22 Oct, "scroll the window up with two fingers"): the lines up from the live screen the
+    /// pane wants, as one or two fingers, a trackpad or a mouse's wheel move it; and ⌘F's find.
+    var scroll: (Int) -> Void = { _ in }
+    var openFind: () -> Void = {}
     /// The hidden matrix mode: every colour green, as bright as it was, on black.
     var matrix = false { didSet { if matrix != oldValue { setNeedsDisplay() } } }
     private var state: PortholeTerminalState?
@@ -92,10 +197,91 @@ final class PortholeTerminalView: UIView, UIKeyInput {
         isOpaque = true
         contentMode = .redraw
         addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped)))
+        addGestureRecognizer(UILongPressGestureRecognizer(target: self, action: #selector(longPressed)))
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(panned))
+        pan.minimumNumberOfTouches = 1
+        pan.maximumNumberOfTouches = 2
+        pan.allowedScrollTypesMask = .all
+        addGestureRecognizer(pan)
     }
     required init?(coder: NSCoder) { fatalError() }
 
     @objc private func tapped() { becomeFirstResponder() }
+
+    // MARK: Porthole: scrolling the session's history
+
+    private var panStart = 0
+    private var wanted: Int?
+    private var lastSent: Int?
+    private var sendTimer: Timer?
+
+    /// Content follows the finger: down shows older lines. A line a cell's height; sent at most every
+    /// 50 ms, the last always.
+    @objc private func panned(_ g: UIPanGestureRecognizer) {
+        guard let state, let history = state.history else { return }
+        switch g.state {
+        case .began:
+            panStart = state.scrolledUp
+            lastSent = state.scrolledUp
+        case .changed, .ended:
+            let lines = min(history, max(0, panStart + Int((g.translation(in: self).y / metrics.cell.height).rounded())))
+            wanted = lines
+            if g.state == .ended { flushScroll(); return }
+            if sendTimer == nil {
+                flushScroll()
+                sendTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: false) { [weak self] _ in
+                    self?.sendTimer = nil
+                    self?.flushScroll()
+                }
+            }
+        default:
+            break
+        }
+    }
+
+    private func flushScroll() {
+        guard let wanted, wanted != lastSent else { return }
+        lastSent = wanted
+        scroll(wanted)
+    }
+
+    // MARK: Porthole: held keys repeat
+
+    /// Delete, the arrows and the page keys repeat while held, at a Mac's pace: iPadOS repeats only what
+    /// its text system types, and this view sends these itself (22 Oct: "key repeat, especially on delete,
+    /// doesn't work that well").
+    private var repeating: (key: UIKeyboardHIDUsage, timer: Timer)?
+    static let repeatDelay = 0.35
+    static let repeatInterval = 0.035
+
+    private func startRepeat(_ key: UIKey, bytes: String) {
+        stopRepeat()
+        guard Self.repeats(key.keyCode) else { return }
+        let code = key.keyCode
+        let timer = Timer.scheduledTimer(withTimeInterval: Self.repeatDelay, repeats: false) { [weak self] _ in
+            guard let self, self.repeating?.key == code else { return }
+            self.send(bytes)
+            let again = Timer.scheduledTimer(withTimeInterval: Self.repeatInterval, repeats: true) { [weak self] _ in self?.send(bytes) }
+            self.repeating = (code, again)
+        }
+        repeating = (code, timer)
+    }
+
+    private func stopRepeat(_ key: UIKeyboardHIDUsage? = nil) {
+        guard let r = repeating, key == nil || r.key == key else { return }
+        r.timer.invalidate()
+        repeating = nil
+    }
+
+    static func repeats(_ code: UIKeyboardHIDUsage) -> Bool {
+        [.keyboardDeleteOrBackspace, .keyboardDeleteForward, .keyboardUpArrow, .keyboardDownArrow, .keyboardLeftArrow,
+         .keyboardRightArrow, .keyboardPageUp, .keyboardPageDown].contains(code)
+    }
+
+    override func resignFirstResponder() -> Bool {
+        stopRepeat()
+        return super.resignFirstResponder()
+    }
 
     func show(_ new: PortholeTerminalState) {
         guard new.version != state?.version || new.id != state?.id else { return }
@@ -155,6 +341,20 @@ final class PortholeTerminalView: UIView, UIKeyInput {
                     }
                     col += wide ? 2 : 1
                 }
+            }
+        }
+        // Porthole: the find's matches on this screen, the one shown brighter.
+        for hit in state.find?.hits ?? [] where hit.row >= firstRow && hit.row <= lastRow {
+            let r = CGRect(x: inset + CGFloat(hit.column) * cw - 1, y: inset + CGFloat(hit.row) * ch,
+                           width: CGFloat(max(1, hit.length)) * cw + 2, height: ch)
+            ctx.setFillColor(UIColor.systemYellow.withAlphaComponent(hit.current ? 0.5 : 0.22).cgColor)
+            ctx.addPath(UIBezierPath(roundedRect: r, cornerRadius: 3).cgPath)
+            ctx.fillPath()
+            if hit.current {
+                ctx.setStrokeColor(UIColor.systemOrange.cgColor)
+                ctx.setLineWidth(1.5)
+                ctx.addPath(UIBezierPath(roundedRect: r, cornerRadius: 3).cgPath)
+                ctx.strokePath()
             }
         }
         if let c = state.cursor, c.y >= firstRow, c.y <= lastRow {
@@ -219,18 +419,110 @@ final class PortholeTerminalView: UIView, UIKeyInput {
     func insertText(_ text: String) { send(text.replacingOccurrences(of: "\n", with: "\r")) }
     func deleteBackward() { send("\u{7f}") }
 
+    // Porthole (22 Oct review): a terminal takes what is typed as typed: no smart quotes or dashes, no
+    // capitals or corrections, as the stream's input view has it.
+    @objc var keyboardType: UIKeyboardType = .asciiCapable
+    @objc var autocorrectionType: UITextAutocorrectionType = .no
+    @objc var autocapitalizationType: UITextAutocapitalizationType = .none
+    @objc var smartQuotesType: UITextSmartQuotesType = .no
+    @objc var smartDashesType: UITextSmartDashesType = .no
+    @objc var spellCheckingType: UITextSpellCheckingType = .no
+
+    // MARK: Porthole: paste and copy
+
+    /// ⌘V, or Paste from the long-press menu: the clipboard as a bracketed paste, so a multi-line paste
+    /// arrives whole in Claude's prompt instead of sending at its first line.
+    override func paste(_ sender: Any?) {
+        guard let text = UIPasteboard.general.string, !text.isEmpty else { return }
+        let clean = text.replacingOccurrences(of: "\u{1b}", with: "")
+        send("\u{1b}[200~" + clean + "\u{1b}[201~")
+    }
+
+    /// The screen's text (Copy from the long-press menu).
+    override func copy(_ sender: Any?) {
+        guard let state else { return }
+        UIPasteboard.general.string = state.lines.map { $0.replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression) }
+            .joined(separator: "\n").trimmingCharacters(in: .newlines)
+    }
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(paste(_:)) { return UIPasteboard.general.hasStrings }
+        if action == #selector(copy(_:)) { return state != nil }
+        return false
+    }
+
+    @objc private func longPressed(_ g: UILongPressGestureRecognizer) {
+        guard g.state == .began else { return }
+        becomeFirstResponder()
+        let at = g.location(in: self)
+        editMenu.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: at))
+    }
+
+    private lazy var editMenu: UIEditMenuInteraction = {
+        let i = UIEditMenuInteraction(delegate: nil)
+        addInteraction(i)
+        return i
+    }()
+
+    // MARK: Porthole: the keys a touch keyboard lacks
+
+    /// Over the on-screen keyboard: Esc (interrupt Claude), ⇧⇥ (accept edits on or off), ⇥, the arrows
+    /// (through Claude's options), ^C and Return (22 Oct review: none of these could be typed on an iPhone).
+    override var inputAccessoryView: UIView? { HardwareKeyboardMonitor.shared.attached ? nil : keyRow }
+
+    private lazy var keyRow: UIView = {
+        let keys: [(String, String, String)] = [("esc", "\u{1b}", "Escape"), ("⇧⇥", "\u{1b}[Z", "Shift Tab"), ("⇥", "\t", "Tab"),
+                                                ("←", "\u{1b}[D", "Left"), ("↑", "\u{1b}[A", "Up"), ("↓", "\u{1b}[B", "Down"),
+                                                ("→", "\u{1b}[C", "Right"), ("^C", "\u{3}", "Control C"), ("⏎", "\r", "Return")]
+        let bar = UIInputView(frame: CGRect(x: 0, y: 0, width: 0, height: 46), inputViewStyle: .keyboard)
+        bar.allowsSelfSizing = true
+        let stack = UIStackView()
+        stack.axis = .horizontal
+        stack.distribution = .fillEqually
+        stack.spacing = 6
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        for (label, bytes, name) in keys {
+            var config = UIButton.Configuration.gray()
+            config.title = label
+            config.cornerStyle = .medium
+            config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { a in
+                var a = a; a.font = .monospacedSystemFont(ofSize: 15, weight: .medium); return a
+            }
+            let b = UIButton(configuration: config, primaryAction: UIAction { [weak self] _ in self?.send(bytes) })
+            b.accessibilityLabel = name
+            stack.addArrangedSubview(b)
+        }
+        bar.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: bar.layoutMarginsGuide.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: bar.layoutMarginsGuide.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: bar.topAnchor, constant: 5),
+            stack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -5),
+            bar.heightAnchor.constraint(equalToConstant: 46),
+        ])
+        return bar
+    }()
+
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         let hotKeys = PortholeHotKeys.claim(presses, down: true)
         var rest: Set<UIPress> = []
         for press in presses.subtracting(hotKeys) {
-            if let key = press.key, let bytes = Self.bytes(for: key) { send(bytes) } else { rest.insert(press) }
+            // ⌘F: find in this session, as in iTerm.
+            if let key = press.key, key.keyCode == .keyboardF, key.modifierFlags.contains(.command) { openFind(); continue }
+            if let key = press.key, let bytes = Self.bytes(for: key) { send(bytes); startRepeat(key, bytes: bytes) } else { rest.insert(press) }
         }
         if !rest.isEmpty { super.pressesBegan(rest, with: event) }
     }
 
     override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses { if let key = press.key { stopRepeat(key.keyCode) } }
         let rest = presses.subtracting(PortholeHotKeys.claim(presses, down: false))
         if !rest.isEmpty { super.pressesEnded(rest, with: event) }
+    }
+
+    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses { if let key = press.key { stopRepeat(key.keyCode) } }
+        super.pressesCancelled(presses, with: event)
     }
 
     /// What a terminal sends for the keys UIKeyInput doesn't cover: arrows, Escape, Tab, Return and

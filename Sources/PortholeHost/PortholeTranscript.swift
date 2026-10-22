@@ -14,6 +14,7 @@ struct PortholeTranscript {
         case nothing
         case you                    // your prompt (Claude busy on it, or the turn was interrupted)
         case claude(String)         // Claude's text, last in its turn
+        case error(String)          // an API error Claude Code wrote in Claude's place (rate limit, overload, login)
         case toolPending(String)    // a tool use still waiting for its result: a permission prompt or a question
         case toolDone               // the last tool use has its result and Claude has said nothing since
     }
@@ -38,6 +39,16 @@ struct PortholeTranscript {
     private(set) var lastClaudeText: String?
     /// Tool uses waiting for a result: id → tool name.
     private var pending: [String: String] = [:]
+    /// Porthole (22 Oct, the states review): Claude Code wrote `system/turn_duration` after Claude's last word,
+    /// and nothing has started a turn since. `claude agents` calls a session whose turn is over but whose
+    /// background shell still runs "busy"; this says it waits for you.
+    private(set) var turnOver = false
+    /// Background agents and workflows still running when the turn ended: those do wake Claude, so Working.
+    private(set) var background = 0
+    /// When Claude asked something you haven't answered. A turn a task notification started doesn't answer it.
+    private(set) var openAskAt: Double?
+    /// When the current turn began, for the Working list's order (stable while it runs).
+    private(set) var turnStartAt: Double?
     /// Entries kept in memory (the newest).
     let keep: Int
 
@@ -59,15 +70,39 @@ struct PortholeTranscript {
         case "custom-title":
             if let t = (record["customTitle"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty { customTitle = t }
             return []
+        case "system":
+            if record["subtype"] as? String == "turn_duration" {
+                turnOver = true
+                background = (record["pendingBackgroundAgentCount"] as? Int ?? 0) + (record["pendingWorkflowCount"] as? Int ?? 0)
+                switch tail {
+                case .claude(let text) where Self.asks(text): openAskAt = openAskAt ?? tailAt
+                case .error: openAskAt = openAskAt ?? tailAt
+                default: break
+                }
+            }
+            return []
+        case "attachment":
+            // A prompt you typed while Claude worked joins the running turn: you have answered.
+            if let a = record["attachment"] as? [String: Any], a["type"] as? String == "queued_command",
+               a["humanTurn"] as? Bool == true { openAskAt = nil }
+            return []
         case "user":
             if record["isMeta"] as? Bool == true || record["isCompactSummary"] as? Bool == true
                 || record["isSidechain"] as? Bool == true { return [] }
             guard let message = record["message"] as? [String: Any] else { return [] }
+            // Any text, yours or a task notification's, starts a turn.
+            if message["content"] is String
+                || (message["content"] as? [[String: Any]])?.contains(where: { $0["type"] as? String == "text" }) == true {
+                if turnOver || turnStartAt == nil { turnStartAt = at }
+                turnOver = false
+            }
             if let text = message["content"] as? String { return you(text, at: at) }
             var added: [TranscriptEntry] = []
             for block in message["content"] as? [[String: Any]] ?? [] {
                 switch block["type"] as? String {
                 case "tool_result":
+                    // Answering a pending AskUserQuestion answers the question.
+                    if let id = block["tool_use_id"] as? String, pending[id] == "AskUserQuestion" { openAskAt = nil }
                     if let id = block["tool_use_id"] as? String, pending.removeValue(forKey: id) != nil,
                        pending.isEmpty, case .toolPending = tail {
                         tail = .toolDone; tailAt = at
@@ -82,6 +117,8 @@ struct PortholeTranscript {
         case "assistant":
             if record["isSidechain"] as? Bool == true { return [] }
             guard let message = record["message"] as? [String: Any] else { return [] }
+            turnOver = false
+            let apiError = record["isApiErrorMessage"] as? Bool == true
             var added: [TranscriptEntry] = []
             for block in message["content"] as? [[String: Any]] ?? [] {
                 switch block["type"] as? String {
@@ -89,7 +126,7 @@ struct PortholeTranscript {
                     let text = (block["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !text.isEmpty else { continue }
                     lastClaudeText = text
-                    tail = .claude(text); tailAt = at
+                    tail = apiError ? .error(text) : .claude(text); tailAt = at
                     added.append(add(.claude, text, at: at))
                 case "tool_use":
                     let name = block["name"] as? String ?? "Tool"
@@ -113,6 +150,8 @@ struct PortholeTranscript {
 
     private mutating func you(_ raw: String, at: Double?) -> [TranscriptEntry] {
         guard let text = Self.prompt(raw) else { return [] }
+        // Your prompt, or your Esc, answers whatever was open.
+        openAskAt = nil
         if text == Self.interrupted {
             // Your Esc: Claude stopped, nothing is pending any more.
             pending = [:]
@@ -139,12 +178,28 @@ struct PortholeTranscript {
     // MARK: State
 
     /// The session's state for the sidebar, given whether `claude agents` says it is busy.
-    func state(busy: Bool) -> ClaudeSession.State {
-        if busy { return .working }
+    func state(busy: Bool) -> ClaudeSession.State { state(status: busy ? "busy" : "idle") }
+
+    /// The session's state for the sidebar, given `claude agents`' word for it: busy, idle or waiting.
+    func state(status: String) -> ClaudeSession.State {
+        if status == "waiting" { return .needsYou }   // a permission prompt or a question in the terminal
+        // Busy with the turn over means only a background shell runs (the CLI reports "shell" as busy): Claude
+        // waits for you. Background agents and workflows still count as working.
+        if status == "busy", !(turnOver && background == 0) { return .working }
+        if openAskAt != nil { return .needsYou }
         switch tail {
-        case .toolPending: return .needsYou
+        case .toolPending, .error: return .needsYou
         case .claude(let text): return Self.asks(text) ? .needsYou : .done
         case .you, .nothing, .toolDone: return .idle
+        }
+    }
+
+    /// When the state began: an open question's time, the turn's start while working, else the tail's.
+    func since(for state: ClaudeSession.State) -> Double? {
+        switch state {
+        case .needsYou: return openAskAt ?? tailAt
+        case .working: return turnStartAt ?? tailAt
+        default: return tailAt
         }
     }
 
@@ -154,17 +209,45 @@ struct PortholeTranscript {
         return Self.oneLine(text, limit: PortholeWire.previewLength)
     }
 
-    /// Whether a finished turn's text asks Jon something: a question mark, or a request for a decision,
-    /// in its last paragraph.
+    /// Whether a finished turn's text asks Jon something, judged on its last sentence as Claude Code's agent
+    /// view judges it (22 Oct, the states review: any "?" or cue word in the last paragraph flagged 29% of
+    /// finished turns, "confirmed" and "if you'd rather…, tell me" among them). A question then a one-line
+    /// sign-off still asks; an offer Claude can take or leave ("Want me to also add tests?") doesn't.
     static func asks(_ text: String) -> Bool {
-        let paragraphs = text.components(separatedBy: "\n\n").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-        let last = (paragraphs.last(where: { !$0.isEmpty }) ?? "").lowercased()
-        // A question in a code block or a link is not a question to Jon.
-        let plain = last.replacingOccurrences(of: #"`[^`]*`|\([^)]*\)\]?|https?://\S+"#, with: "", options: .regularExpression)
-        if plain.contains("?") { return true }
-        let cues = ["shall i", "should i", "do you want", "would you like", "want me to", "let me know", "tell me",
-                    "your call", "say \"", "say go", "reply with", "which one", "confirm", "can you ", "could you "]
-        return cues.contains { plain.contains($0) }
+        // Code, link targets and URLs are not questions to you; emphasis goes so "**Shall I?**" ends in "?".
+        let plain = text
+            .replacingOccurrences(of: #"(?s)```.*?```"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"`[^`]*`|\]\([^)]*\)|https?://\S+"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"[*_]+"#, with: "", options: .regularExpression)
+        let paragraphs = plain.components(separatedBy: "\n\n").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard let last = paragraphs.last else { return false }
+        var sentences = [lastSentence(last)]
+        // "Shall I send it?" then a one-line sign-off: the question is still the ask.
+        if paragraphs.count > 1, !last.contains("\n"), last.count <= 160 { sentences.append(lastSentence(paragraphs[paragraphs.count - 2])) }
+        return sentences.contains(where: isAsk)
+    }
+
+    /// A paragraph's last line, then that line's last sentence.
+    static func lastSentence(_ p: String) -> String {
+        let line = p.components(separatedBy: "\n").last { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? p
+        let parts = line.trimmingCharacters(in: .whitespaces)
+            .replacingOccurrences(of: #"([.!?])\s+(?=\S)"#, with: "$1\u{1F}", options: .regularExpression)
+            .components(separatedBy: "\u{1F}")
+        return (parts.last ?? line).trimmingCharacters(in: .whitespaces)
+    }
+
+    static func isAsk(_ sentence: String) -> Bool {
+        let s = sentence.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "()").union(.whitespaces))
+        func has(_ p: String) -> Bool { s.range(of: p, options: .regularExpression) != nil }
+        // An offer Claude can take or leave ("Want me to also add tests?") is done; Claude Code judges it so too.
+        if has(#"\b(want|like) me to\b|\b(shall|should) i also\b"#) { return false }
+        // A question in quotes is a quotation (a draft's words), not one to you.
+        let quoted = has(#"["“][^"”]*[?？]["”][)\]]*$"#)
+        if !quoted, has(#"[?？]["')\]]*$"#) { return true }
+        // A conditional offer ("if you'd rather keep it, tell me") asks nothing either.
+        if has(#"^(if|when|once|whenever|otherwise)\b|\bif you\b"#) { return false }
+        return has(#"\b(shall i|should i (proceed|continue|go ahead|send)|do you want|which (one|option|approach)|your call|say "?(go|yes|send)\b|reply with|please (confirm|choose|decide|pick|approve|run|provide)|can you confirm|let me know (which|what|whether|if|how|when)|tell me (which|what|whether|if))\b"#)
     }
 
     // MARK: Text
@@ -176,7 +259,8 @@ struct PortholeTranscript {
     static func prompt(_ raw: String) -> String? {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
-        if text.hasPrefix(interrupted) { return interrupted }
+        // "[Request interrupted by user]" and "… for tool use]" both.
+        if text.hasPrefix("[Request interrupted by user") { return interrupted }
         if text.contains("<command-name>") {
             let name = between(text, "<command-name>", "</command-name>") ?? ""
             let args = between(text, "<command-args>", "</command-args>") ?? ""
@@ -278,7 +362,7 @@ final class PortholeTranscriptFile {
     /// Nil: read from the start, so sequence numbers count from the file's first entry. A number: the
     /// first read (and one after a reset) starts this many bytes from the end and skips the partial
     /// first line, for a session followed only for its state and preview.
-    private let tailBytes: UInt64?
+    private var tailBytes: UInt64?
 
     init(url: URL, keep: Int = 400, tailBytes: UInt64? = nil) {
         self.url = url
@@ -327,6 +411,13 @@ final class PortholeTranscriptFile {
         }
         partial = Data(buffer[lineStart...])
         partialStart = bufferStart + UInt64(lineStart - buffer.startIndex)
+        // Porthole (22 Oct, the states review): only bookkeeping in the window (a compaction after the last turn
+        // writes ~300 KB of attachments): look further back, up to 4 MB.
+        if skipFirstLine, model.tail == .nothing, let w = tailBytes, size > w, w < 4 << 20 {
+            tailBytes = w * 4
+            model = PortholeTranscript(keep: keep); offset = 0; partial = Data(); partialStart = 0
+            return readNew()
+        }
         return (added, reset)
     }
 
