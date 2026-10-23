@@ -13,6 +13,7 @@ import UIKit
 ///   ⌃⌥] / [   next / previous app      ⌃⌥G        one window, two tiles, four tiles
 ///   ⌃⌥S       show or hide the sidebar   ⌃⌥B        show or hide the top bar
 ///   ⌃⌥V       Claude Code's agent view as text   ⌃⌥T        a session as text or as its window
+///   ⌃⌥D       the Desktop, and from the Desktop back to what was on screen before it
 ///   ⌃⌥ a letter       a favourite app (PortholeFavourites; at first C L W K M A F: Chrome, Claude,
 ///                     WhatsApp, Slack, Mail, Calendar, Finder), Jon's to change
 ///
@@ -28,7 +29,7 @@ enum PortholeHotKeys {
     enum Action: Equatable {
         case switcher, nextNeedingYou, nextSession, previousSession, session(Int)
         case nextWindow, previousWindow, nextAppWindow, previousAppWindow, nextApp, previousApp, tiles, sidebar, topBar
-        case flip, flipFurther, app(String), back, forward, agentView, textMode, searchSessions
+        case flip, flipFurther, app(String), back, forward, agentView, textMode, searchSessions, desktop
     }
 
     /// Set by the connected screen (PortholeShell).
@@ -67,6 +68,7 @@ enum PortholeHotKeys {
         case .keyboardB: return .topBar
         case .keyboardV: return .agentView
         case .keyboardT: return .textMode
+        case .keyboardD: return .desktop
         case .keyboard1: return .session(1)
         case .keyboard2: return .session(2)
         case .keyboard3: return .session(3)
@@ -121,6 +123,7 @@ struct PortholeKeyCommands: View {
             key("Agent view", "v", .agentView)
             key("Session as text or window", "t", .textMode)
             key("Search all sessions", "/", .searchSessions)
+            key("Desktop", "d", .desktop)
             ForEach(PortholeFavourites.apps.filter { $0.key != nil }, id: \.bundleID) { fav in key(fav.name, KeyEquivalent(fav.key!), .app(fav.bundleID)) }
             ForEach(1...9, id: \.self) { n in key("Session \(n)", KeyEquivalent(Character("\(n)")), .session(n)) }
         }
@@ -145,7 +148,7 @@ enum PortholeFavourites {
         get {
             guard let data = UserDefaults.standard.data(forKey: storageKey),
                   let list = try? JSONDecoder().decode(PortholeFavouritesList.self, from: data) else { return .standard }
-            return list
+            return list.withoutReservedKeys()
         }
         set { UserDefaults.standard.set(try? JSONEncoder().encode(newValue), forKey: storageKey) }
     }

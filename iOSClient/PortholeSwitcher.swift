@@ -12,7 +12,7 @@ struct PortholeSwitcher: View {
     @FocusState private var focused: Bool
 
     struct Hit: Identifiable {
-        enum Target { case session(String), window(UInt32), app(String), tab(BrowserTab, BrowserWindow) }
+        enum Target { case session(String), window(UInt32), app(String), tab(BrowserTab, BrowserWindow), desktop(UInt32?) }
         let id: String
         let group: String
         let title: String
@@ -88,7 +88,12 @@ struct PortholeSwitcher: View {
             .shadow(color: .black.opacity(0.5), radius: 30, y: 16)
             .padding(.top, 40).padding(.horizontal, 16)
         }
-        .onAppear { focused = true; selected = 0 }
+        .onAppear {
+            focused = true; selected = 0
+            #if DEBUG
+            if let q = UserDefaults.standard.string(forKey: "PortholeSwitcher") { query = q }
+            #endif
+        }
         .onChange(of: query) { _, _ in selected = 0 }
     }
 
@@ -100,15 +105,30 @@ struct PortholeSwitcher: View {
         case .window(let id): client.show(window: id); open(.apps)
         case .app(let bundleID): client.launch(bundleID: bundleID); open(.apps)
         case .tab(let tab, let window): client.open(tab: tab, in: window); open(.apps)
+        case .desktop(let display):
+            if let display, display != client.desktopDisplay { client.pickDisplay(display) } else { client.select(.desktop) }
+            open(.apps)
         }
     }
 
-    /// Matches for `query`: sessions (needs you first), then open windows, then installed apps; with no
-    /// query, the sessions that need you and the most recent windows.
+    /// Matches for `query`: the Desktop, sessions (needs you first), then open windows, then installed apps;
+    /// with no query, the sessions that need you and the most recent windows.
     static func hits(_ query: String, client: StreamClient) -> [Hit] {
         let q = query.trimmingCharacters(in: .whitespaces)
         func match(_ s: String...) -> Bool { q.isEmpty || s.contains { $0.localizedCaseInsensitiveContains(q) } }
         var hits: [Hit] = []
+        // "des…", "scr…", a screen's name: the Desktop (⌃⌥D) first, so Return opens it; one hit for each screen
+        // when there are two or more. Three letters at least, so a session's first letter still leads.
+        let word = q.lowercased()
+        let named = word.count >= 3 && ["desktop", "screen"].contains { $0.hasPrefix(word) }
+        let screens = client.displays.count > 1 ? client.displays : []
+        if screens.isEmpty, named {
+            hits.append(Hit(id: "d:", group: "Mac", title: "Desktop", detail: "The whole Mac screen · ⌃⌥D", target: .desktop(nil), needsYou: false))
+        }
+        for d in screens where named || (word.count >= 2 && d.name.localizedCaseInsensitiveContains(q)) {
+            hits.append(Hit(id: "d:\(d.id)", group: "Mac", title: "Desktop · \(d.name)", detail: d.main ? "The main screen · ⌃⌥D" : "Another screen",
+                            target: .desktop(d.id), needsYou: false))
+        }
         for s in client.porthole.sessions where match(s.title, s.portal, s.folder) && (!q.isEmpty || s.state == .needsYou) {
             let detail = s.state == .needsYou ? "\(s.portal), needs you" + (PortholeStyle.waited(s.since).map { " for \($0)" } ?? "") : s.portal
             hits.append(Hit(id: "s:" + s.id, group: "Claude Code", title: s.title, detail: detail, target: .session(s.id), needsYou: s.state == .needsYou))

@@ -15,8 +15,8 @@ struct PortholeFavouritesList: Codable, Equatable {
     var apps: [App]
 
     /// Letters Porthole's own ⌃⌥ keys use, which a favourite never takes: S sidebar, B top bar, V agent
-    /// view, T text, G tiles, J the next session that needs you.
-    static let reserved: Set<Character> = ["s", "b", "v", "t", "g", "j"]
+    /// view, T text, G tiles, J the next session that needs you, D the Desktop (23 Oct).
+    static let reserved: Set<Character> = ["s", "b", "v", "t", "g", "j", "d"]
 
     /// The first list: seven common apps (Chrome, the Claude app, WhatsApp, Slack, Mail, Calendar, Finder).
     static let standard = PortholeFavouritesList(apps: [
@@ -66,7 +66,14 @@ struct PortholeFavouritesList: Codable, Equatable {
     }
 
     func app(forKey characters: String) -> App? {
-        guard characters.count == 1, let c = characters.lowercased().first else { return nil }
+        guard characters.count == 1, let c = characters.lowercased().first, !Self.reserved.contains(c) else { return nil }
         return apps.first { $0.key == String(c) }
+    }
+
+    /// A list kept from before a letter became Porthole's (D, 23 Oct): that favourite loses the letter.
+    func withoutReservedKeys() -> PortholeFavouritesList {
+        var list = self
+        for i in list.apps.indices where list.apps[i].key.first.map(Self.reserved.contains) == true { list.apps[i].key = "" }
+        return list
     }
 }

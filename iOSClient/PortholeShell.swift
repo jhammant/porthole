@@ -50,7 +50,7 @@ struct PortholeShell: View {
                     HStack(spacing: 0) {
                         if sidebarShown {
                             PortholeSidebar(client: client, pick: pick, open: open, onTiles: { tilePickerShown = true },
-                                            onNext: { handle(.nextWindow) },
+                                            onNext: { handle(.nextWindow) }, onDesktop: toggleDesktop,
                             sessionsMode: !sessionsAsText ? .window : agentBeside ? .textWithAgent : .text, setMode: setSessionsMode,
                             searchFocus: searchFocus, openSearchHit: openSearchHit)
                                 .frame(width: sidebarFrame(geo.size, posture))
@@ -111,6 +111,8 @@ struct PortholeShell: View {
             if let s, let q = UserDefaults.standard.string(forKey: "PortholeFind"), let t = s.terminalID { client.porthole.pendingFind[t] = q }
             if let s { open(.session(s.id)) }
         }
+        // -PortholeSwitcher WORDS: the quick switcher open with its words typed (simulator runs).
+        .onAppear { if UserDefaults.standard.string(forKey: "PortholeSwitcher") != nil { switcherShown = true } }
         // -PortholeTiles 2|4: tile the most recent windows a few seconds after connecting (simulator runs;
         // the list has usually arrived before this screen appears, so a change of it can't be the trigger).
         .task {
@@ -230,7 +232,7 @@ struct PortholeShell: View {
     private var compactBody: some View {
         NavigationStack(path: $compactPath) {
             PortholeSidebar(client: client, pick: pick, open: open, onTiles: { tilePickerShown = true },
-                            onNext: { handle(.nextWindow) },
+                            onNext: { handle(.nextWindow) }, onDesktop: toggleDesktop,
                             sessionsMode: !sessionsAsText ? .window : agentBeside ? .textWithAgent : .text, setMode: setSessionsMode,
                             searchFocus: searchFocus, openSearchHit: openSearchHit)
                 .toolbar(.hidden, for: .navigationBar)
@@ -281,6 +283,32 @@ struct PortholeShell: View {
         }
     }
 
+    /// The Desktop streaming in the detail (not a session's text over it).
+    private var onDesktop: Bool { pick == .apps && client.active == .desktop }
+
+    /// The Desktop, from the sidebar's row or ⌃⌥D (23 Oct: "make it easier to switch to Desktop"); from the
+    /// Desktop, back to what was on screen before it, so the same key or tap goes there and back.
+    private func toggleDesktop() {
+        if onDesktop {
+            switch client.porthole.history.first(where: { !gone($0) }) {
+            case .session(let id): open(.session(id))
+            case .window(let id): openWindow(id)
+            case nil: break
+            }
+            return
+        }
+        client.select(.desktop)
+        open(.apps)
+    }
+
+    /// A session or window that has since closed.
+    private func gone(_ item: PortholeHistoryItem) -> Bool {
+        switch item {
+        case .session(let id): return client.porthole.session(id) == nil
+        case .window(let id): return !client.windows.contains { $0.id == id }
+        }
+    }
+
     /// What is on screen as a source: the picked session's window (shown as its window or as text), else
     /// what streams.
     private var onScreen: StreamSource {
@@ -311,19 +339,14 @@ struct PortholeShell: View {
             if let w = PortholeApps.window(after: onScreen, in: PortholeSidebar.appWindows(client), sameApp: false,
                                            step: action == .nextApp ? 1 : -1) { openWindow(w.id) }
         case .back, .forward:
-            let gone: (PortholeHistoryItem) -> Bool = { item in
-                switch item {
-                case .session(let id): return client.porthole.session(id) == nil
-                case .window(let id): return !client.windows.contains { $0.id == id }
-                }
-            }
             switch client.porthole.backForward.step(action == .back ? -1 : 1, isOpen: { !gone($0) }) {
             case .session(let id): open(.session(id))
             case .window(let id): openWindow(id)
             case nil: break
             }
         case .flip, .flipFurther:
-            let depth = action == .flip ? 1 : 2
+            // The Desktop isn't in the history, so from it the last thing is the first one back.
+            let depth = (action == .flip ? 1 : 2) - (onDesktop ? 1 : 0)
             let history = client.porthole.history
             guard history.count > depth else { return }
             switch history[depth] {
@@ -346,6 +369,8 @@ struct PortholeShell: View {
             withAnimation(.easeOut(duration: 0.18)) { topBarHidden.toggle() }
         case .switcher:
             switcherShown.toggle()
+        case .desktop:
+            toggleDesktop()
         case .searchSessions:
             // The sidebar's search, in sight and with the keyboard.
             if !sidebarShown { withAnimation(.easeOut(duration: 0.18)) { sidebarShown = true } }
@@ -526,6 +551,8 @@ struct PortholeSidebar: View {
     var onTiles: () -> Void = {}
     /// The header's Next window button (⌃⌥↓).
     var onNext: () -> Void = {}
+    /// The Desktop row (⌃⌥D): the Desktop, or back from it.
+    var onDesktop: () -> Void = {}
     /// Sessions as their windows, as text, or as text with the agent view beside (PortholeTextSwitch, ⌃⌥T).
     var sessionsMode: PortholeTextSwitch.Mode = .window
     var setMode: (PortholeTextSwitch.Mode) -> Void = { _ in }
@@ -560,6 +587,7 @@ struct PortholeSidebar: View {
                       if searching {
                         searchResults
                       } else {
+                        desktopRow
                         agentViewRow
                         PortholeTextSwitch(mode: sessionsMode, set: setMode)
                         PortholeColoursSwitch(colours: textColours) { c in
@@ -727,6 +755,42 @@ struct PortholeSidebar: View {
         }
     }
 
+    /// The whole Mac screen (⌃⌥D), which only the top bar's Desktop button reached before (23 Oct), and that
+    /// bar isn't there over a session as text. Tapped on the Desktop, back to what was on screen before;
+    /// with two screens or more, a long press picks the one it streams.
+    private var desktopRow: some View {
+        let selected = pick == .apps && client.active == .desktop
+        let screen = client.displays.count > 1 ? client.displays.first { $0.id == client.desktopDisplay } : nil
+        return Button(action: onDesktop) {
+            HStack(spacing: 10) {
+                Image(systemName: "desktopcomputer").font(PortholeType.ui(14, .medium)).frame(width: 18)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Desktop").font(PortholeType.ui(14.5, .medium)).foregroundStyle(PortholeStyle.text)
+                    Text(screen?.name ?? "The whole Mac screen")
+                        .font(PortholeType.ui(11.5)).foregroundStyle(PortholeStyle.muted).lineLimit(1)
+                }
+                Spacer(minLength: 6)
+                Text("⌃⌥D").font(PortholeType.ui(11.5, mono: true)).foregroundStyle(PortholeStyle.muted)
+            }
+            .padding(.horizontal, 8).padding(.vertical, 8)
+            .background(selected ? PortholeStyle.field : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).foregroundStyle(PortholeStyle.text)
+        .contextMenu {
+            if client.displays.count > 1 {
+                ForEach(client.displays) { d in
+                    Button { client.pickDisplay(d.id); if pick != .apps { open(.apps) } } label: {
+                        Label(d.name + (d.main ? " (main)" : ""), systemImage: d.id == client.desktopDisplay ? "checkmark" : "display")
+                    }
+                }
+            }
+        }
+        .accessibilityLabel(selected ? "Desktop, showing. Back to the last window" : "Desktop, the whole Mac screen")
+        .accessibilityHint(client.displays.count > 1 ? "Control Option D. Touch and hold to pick a screen" : "Control Option D")
+        .padding(.top, 4)
+    }
+
     /// Claude Code's agent view as text: background sessions, sharp at any link speed (⌃⌥V).
     private var agentViewRow: some View {
         let selected = pick == .agentView
@@ -745,7 +809,6 @@ struct PortholeSidebar: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain).foregroundStyle(PortholeStyle.text)
-        .padding(.top, 4)
     }
 
     /// Porthole Pro's switches (PortholePro): the terminal theme; without Pro, a tap opens the Pro sheet.
@@ -792,7 +855,7 @@ struct PortholeSidebar: View {
 
     /// The keys worth knowing, at the foot of the list; holding ⌘ shows every one (PortholeKeyCommands).
     private var keysHint: some View {
-        Text("⌃⌥↓ ↑ next or previous window · ⌃⌥← → back or forward · ⌃⌥V agent view · ⌃⌥Space find · ⌃⌥/ search · hold ⌘ for every key")
+        Text("⌃⌥↓ ↑ next or previous window · ⌃⌥← → back or forward · ⌃⌥D Desktop · ⌃⌥V agent view · ⌃⌥Space find · ⌃⌥/ search · hold ⌘ for every key")
             .font(PortholeType.ui(11)).foregroundStyle(PortholeStyle.muted)
             .padding(.top, 16).padding(.horizontal, 6)
     }

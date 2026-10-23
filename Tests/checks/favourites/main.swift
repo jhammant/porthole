@@ -10,7 +10,7 @@ func check(_ name: String, _ ok: Bool) {
 
 var l = PortholeFavouritesList.standard
 check("the first list is the standard seven", l.apps.map(\.key) == ["c", "l", "w", "k", "m", "a", "f"])
-check("no free key is reserved or taken", l.freeKeys().allSatisfy { !"sbvtgjclwkmaf".contains($0) })
+check("no free key is reserved or taken", l.freeKeys().allSatisfy { !"sbvtgjdclwkmaf".contains($0) })
 l.add(bundleID: "com.googlecode.iterm2", name: "iTerm2")
 check("an app takes the first free letter of its name", l.apps.last?.key == "i")
 l.add(bundleID: "com.apple.Safari", name: "Safari")
@@ -30,6 +30,13 @@ check("no key", l.apps.first { $0.bundleID == "com.apple.Safari" }?.key == "" &&
 l.remove("com.apple.Safari")
 check("removed", !l.contains("com.apple.Safari"))
 check("a key finds its app, case aside", l.app(forKey: "I")?.bundleID == "com.googlecode.iterm2")
+var old = PortholeFavouritesList(apps: [.init(bundleID: "com.hnc.Discord", name: "Discord", key: "d")])
+check("a letter Porthole took later (D, the Desktop) finds no favourite", old.app(forKey: "d") == nil)
+old = old.withoutReservedKeys()
+check("and the favourite loses it", old.apps.first?.key == "")
+var discord = PortholeFavouritesList(apps: [])
+discord.add(bundleID: "com.hnc.Discord", name: "Discord")
+check("a new favourite skips D", discord.apps.first?.key == "i")
 let data = try! JSONEncoder().encode(l)
 check("kept and read back the same", (try? JSONDecoder().decode(PortholeFavouritesList.self, from: data)) == l)
 
