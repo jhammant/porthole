@@ -381,7 +381,7 @@ enum DebugHooks {
             // A view with no window reads a display scale of 1 while the bitmap is 2×: the QR code
             // would be made for 1× and smoothed on the way up. A Retina window gets 2 by itself.
             let view = PairDeviceView(offer: sample.offer, status: sample.status, remoteAccess: sample.remoteAccess,
-                                      actions: PairDeviceView.Actions(), now: previewNow)
+                                      actions: PairDeviceView.Actions(), loginItemOff: sample.loginItemOff, now: previewNow)
                 .environment(\.displayScale, 2)
                 .background(Color(nsColor: .windowBackgroundColor))
             for (name, appearance) in appearances {
@@ -759,9 +759,10 @@ extension DebugHooks {
         var offer: RemoteAccess.PairingOffer
         var status: RemoteStatus
         var remoteAccess = true
+        var loginItemOff = false
     }
 
-    /// pairing-{waiting,requested,wrong,paired,stopped,expired,remoteoff,novpn,othervpn,longname,asked,
+    /// pairing-{waiting,requested,wrong,paired,pairednologin,stopped,expired,remoteoff,novpn,othervpn,longname,asked,
     /// askednearby} (pairing-cablenotice is drawn on its own). A stand-in Mac key (the plan's
     /// SHA-256("mac") vector) and the plan's example code: nothing here pairs anything. The address to
     /// type is Tailscale's name with its IPv4 under it; `novpn` has no VPN, so this network's address;
@@ -814,6 +815,7 @@ extension DebugHooks {
             PairingSample(name: "wrong", offer: offer(),
                           status: status(.open(requestedBy: nil, expiresAt: expires, triesLeft: 4, lastWrongFrom: "203.0.113.9", byDevice: false))),
             PairingSample(name: "paired", offer: offer(), status: status(.paired("iPad (iPad14,1)"))),
+            PairingSample(name: "pairednologin", offer: offer(), status: status(.paired("iPad (iPad14,1)")), loginItemOff: true),
             PairingSample(name: "stopped", offer: offer(), status: status(.stopped)),
             PairingSample(name: "expired", offer: offer(), status: status(.expired)),
             PairingSample(name: "remoteoff", offer: offer(), status: status(open), remoteAccess: false),

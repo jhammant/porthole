@@ -39,7 +39,8 @@ There may also be a hidden mode. Follow the white rabbit.
   asks for Screen Recording and Accessibility (to stream windows and send your input). Requires macOS 14
   or later.
 - **iPad and iPhone**: from the App Store, or join the TestFlight beta (link in Releases). Requires iOS 17
-  or later. Open it on the same network as your Mac and pair with the code the Mac shows.
+  or later. Open it on the same network as your Mac and pair with the code the Mac shows: scan it, or
+  click Copy Link on the Mac and tap Paste on the device (Universal Clipboard carries it over).
 - **Away from home**: put both on [Tailscale](https://tailscale.com) (or your own VPN) and turn on
   Remote access in the Mac app's Settings.
 - **Sessions as text in colour** (optional): Porthole reads iTerm2 through its Python API.

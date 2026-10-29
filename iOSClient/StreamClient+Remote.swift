@@ -38,6 +38,8 @@ enum PairingProblem: Equatable {
     case notPorthole(String)
     case localNetwork(String)
     case notALink
+    /// Paste in Add a Mac found something other than a pairing link on the clipboard.
+    case pastedNotALink
     case noKey(String)
     /// At home (docs/home-pairing-plan.md §7.7, DiscoveryPolicy.homeRefusal): the Mac stopped its
     /// window after five wrong codes; the code expired; the code no longer works (the Mac's Cancel,
@@ -60,7 +62,7 @@ enum PairingProblem: Equatable {
         switch self {
         case .address, .zone, .nothingAnswered, .notPorthole, .localNetwork: return .address
         case .codeLength, .codeTypo, .wrongCode, .expired, .stopped, .homeStopped, .homeExpired, .homeClosed: return .code
-        case .notPairing, .proofFailed, .notALink, .noKey, .homeProofFailed, .homeNoAnswer, .proofFailedOverStream, .noAnswerOverStream,
+        case .notPairing, .proofFailed, .notALink, .pastedNotALink, .noKey, .homeProofFailed, .homeNoAnswer, .proofFailedOverStream, .noAnswerOverStream,
              .macSaid:
             return .card
         }
@@ -85,6 +87,7 @@ enum PairingProblem: Equatable {
         case .notPorthole(let host): return "Something answered at \(host), but it isn’t Porthole, or its Porthole is too old to pair."
         case .localNetwork(let host): return "To reach \(host), allow Local Network for Porthole in Settings."
         case .notALink: return "That’s not a Porthole code."
+        case .pastedNotALink: return "That isn’t a Porthole link. On your Mac, click Copy Link in the pairing window, then tap Paste again."
         case .noKey(let reason): return "This \(StreamClient.deviceWord) couldn’t make its key (\(reason))."
         case .homeStopped(let mac): return DiscoveryPolicy.HomeCopy.stopped(mac: mac)
         case .homeExpired(let mac): return DiscoveryPolicy.HomeCopy.expired(mac: mac)
@@ -851,6 +854,15 @@ extension StreamClient {
             return
         }
         pair(link: link, overlay: overlay, scanned: true)
+    }
+
+    /// A link pasted into Add a Mac (the Mac's Copy Link): paired as a tapped scan of its code; anything
+    /// else says it isn't a Porthole code.
+    func pastedLink(_ text: String) {
+        switch PairLink.parse(text.trimmingCharacters(in: .whitespacesAndNewlines)) {
+        case .success(let link): scanned(link, tapped: true, overlay: false)
+        case .failure: pairing = .failed(.pastedNotALink)
+        }
     }
 
     /// After a failed scan, the scanner's caption says a tap on the code tries again.

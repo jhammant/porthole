@@ -122,8 +122,8 @@ struct AddMacCard: View {
                 .font(.system(size: 13))
                 .foregroundStyle(Palette.muted)
                 .fixedSize(horizontal: false, vertical: true)
-            Text(typed ? "Type the address and code that Porthole shows on your Mac."
-                       : "On your Mac, choose Pair iPhone or iPad… in the Porthole menu, then point this \(device) at the code.")
+            Text(typed ? "Type the address and code that Porthole shows on your Mac, or click Copy Link there and tap Paste."
+                       : "On your Mac, choose Pair iPhone or iPad… in the Porthole menu, then point this \(device) at the code, or click Copy Link there and tap Paste here.")
                 .font(.system(size: 13))
                 .foregroundStyle(Palette.text)
                 .fixedSize(horizontal: false, vertical: true)
@@ -205,10 +205,28 @@ struct AddMacCard: View {
     /// 667 pt wide phone on its side).
     private var links: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 18) { pathToggle; cancelButton }
-            VStack(alignment: .leading, spacing: 0) { pathToggle; cancelButton }
+            HStack(spacing: 18) { pasteLink; pathToggle; cancelButton }
+            VStack(alignment: .leading, spacing: 0) { pasteLink; pathToggle; cancelButton }
         }
         .buttonStyle(.plain)
+    }
+
+    /// The link from the Mac's Copy Link, which Universal Clipboard (the same Apple ID) or Jump Desktop's
+    /// shared clipboard brings here: pairs as a scan of the code would, with no camera and nothing to type
+    /// (29 Oct, "a better way of pairing", with the Mac reached through Jump). The system's paste control,
+    /// so iOS asks nothing before handing the text over.
+    private var pasteLink: some View {
+        PasteButton(payloadType: String.self) { texts in
+            Task { @MainActor in
+                focus = nil
+                client.pastedLink(texts.first ?? "")
+            }
+        }
+        .labelStyle(.titleAndIcon)
+        .buttonBorderShape(.capsule)
+        .tint(Palette.accent)
+        .frame(minHeight: 44)
+        .disabled(working)
     }
 
     @ViewBuilder private var pathToggle: some View {

@@ -84,6 +84,10 @@ final class PairDeviceWindowController: NSWindowController, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         model.cancelPairing()      // a no-op once the code was used, expired or stopped
+        // A copied link dies with the window: it leaves the clipboard too, if nothing replaced it.
+        if let url = state.offer?.url, NSPasteboard.general.string(forType: .string) == url {
+            NSPasteboard.general.clearContents()
+        }
         state.offer = nil
     }
 }
@@ -101,7 +105,14 @@ private struct LivePairDeviceView: View {
                            actions: PairDeviceView.Actions(turnOn: { model.turnOnRemoteAccess() },
                                                            newCode: { model.pairDevice() },
                                                            changePort: { model.showSettings?(.remoteAccess) },
-                                                           close: close))
+                                                           close: close,
+                                                           copyLink: { url in
+                                                               NSPasteboard.general.clearContents()
+                                                               NSPasteboard.general.setString(url, forType: .string)
+                                                           },
+                                                           openAtLogin: { model.loginItem.set(true) }),
+                           loginItemOff: model.loginItem.available && !model.loginItem.isOn)
+                .onAppear { model.loginItem.refresh() }
                 // Remote Access turned off (or the pane's Cancel) closed the pairing: so does the window.
                 .onChange(of: status.pairing) { _, pairing in
                     if pairing == .closed { close() }
@@ -120,12 +131,22 @@ struct PairDeviceView: View {
         var newCode: () -> Void = {}
         var changePort: () -> Void = {}
         var close: () -> Void = {}
+        /// The link (the QR code's contents) onto the clipboard, for Paste in Porthole on the device:
+        /// Universal Clipboard carries it there on the same Apple ID, as do Jump Desktop and the like
+        /// (29 Oct: "a better way of pairing", from an iPad that was using the Mac through Jump).
+        var copyLink: (String) -> Void = { _ in }
+        /// Launch at login on (LoginItemModel).
+        var openAtLogin: () -> Void = {}
     }
 
     let offer: RemoteAccess.PairingOffer
     let status: RemoteStatus
     let remoteAccess: Bool
     let actions: Actions
+    /// Porthole doesn't open at login: after a restart a paired device finds nothing until someone
+    /// opens it on the Mac (29 Oct, the iPad that lost its Mac overnight). Said once a device pairs.
+    var loginItemOff = false
+    @State private var copied = false
     /// The countdown's clock; fixed in the previews, live (once a second) otherwise.
     var now: Date?
 
@@ -175,7 +196,7 @@ struct PairDeviceView: View {
                 Text(Self.askedLine(offer))
                     .font(.headline)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("Point it at this code, or tap Enter Code Instead and type the code.")
+                Text("Point it at this code, or click Copy Link and tap Paste there, or tap Enter Code Instead and type the code.")
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 if let who = offer.requestedBy {
@@ -184,6 +205,9 @@ struct PairDeviceView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Text("In Porthole on your iPhone or iPad, tap this Mac, or tap Add a Mac… when you’re away, then point it at this code.")
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("No camera to hand? Click Copy Link, then tap Paste in Porthole: your iPhone or iPad has the link through Universal Clipboard.")
+                    .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             QRCodeView(text: offer.url, spent: isSpent)
@@ -202,7 +226,7 @@ struct PairDeviceView: View {
         .task(id: phase) {
             // Paired: closes itself after 3 s, unless the Turn On line still has something to say
             // (never on a window a device opened, which has no such line).
-            guard case .paired = phase, remoteAccess || offer.byDevice, now == nil else { return }
+            guard case .paired = phase, remoteAccess || offer.byDevice, !loginItemOff, now == nil else { return }
             try? await Task.sleep(for: .seconds(3))
             if !Task.isCancelled { actions.close() }
         }
@@ -270,7 +294,14 @@ struct PairDeviceView: View {
                     .foregroundStyle(.secondary)
             }
         case .paired(let name):
-            Label("Paired with \(name).", systemImage: "checkmark.circle.fill")
+            VStack(alignment: .leading, spacing: 10) {
+                Label("Paired with \(name).", systemImage: "checkmark.circle.fill")
+                if loginItemOff {
+                    Text("Porthole doesn’t open at login, so after a restart \(name) can’t reach this Mac until Porthole is opened here. Click Open at Login so it starts with the Mac.")
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
         case .stopped:
             Text("Pairing stopped after \(5) wrong codes.")
         case .expired:
@@ -323,10 +354,25 @@ struct PairDeviceView: View {
                 Button("Turn On Remote Access", action: actions.turnOn)
             }
             switch phase {
-            case .waiting, .closed:
+            case .waiting:
+                Button(copied ? "Copied" : "Copy Link") {
+                    actions.copyLink(offer.url)
+                    copied = true
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(1.5))
+                        copied = false
+                    }
+                }
+                .accessibilityLabel(copied ? "Copied" : "Copy the pairing link")
+                Button("Cancel", action: actions.close)
+                    .keyboardShortcut(.cancelAction)
+            case .closed:
                 Button("Cancel", action: actions.close)
                     .keyboardShortcut(.cancelAction)
             case .paired:
+                if loginItemOff {
+                    Button("Open at Login", action: actions.openAtLogin)
+                }
                 Button("Done", action: actions.close)
                     .keyboardShortcut(.defaultAction)
             case .stopped, .expired:
