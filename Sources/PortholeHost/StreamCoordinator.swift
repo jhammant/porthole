@@ -1473,7 +1473,9 @@ package final class StreamCoordinator {
                 if let resized = fitToViewport(w) { size = await Self.settledSize(of: id, near: resized) }
                 describe = "\(w.owningApplication?.applicationName ?? "?") — \(w.title ?? "")\(useSoftwareEncoder ? " (software encoder)" : "")"
             }
-            width = evenPixels(size.width * captureScale); height = evenPixels(size.height * captureScale)
+            // On the window's own screen no finer than that screen (`pixelScale`); staged, the stage's display is Porthole's.
+            let windowScale = sourceRect == nil ? filter.map(pixelScale) ?? captureScale : captureScale
+            width = evenPixels(size.width * windowScale); height = evenPixels(size.height * windowScale)
             // Staged on the virtual display, nothing is activated or raised on select: the window
             // cannot be covered there, and the AX moves that put it there touch no focus.
         case .desktop:
@@ -1501,7 +1503,8 @@ package final class StreamCoordinator {
                 } else {
                     filter = SCContentFilter(display: d, excludingWindows: [])
                 }
-                width = evenPixels(CGFloat(d.width) * captureScale); height = evenPixels(CGFloat(d.height) * captureScale)
+                let displayScale = filter.map(pixelScale) ?? captureScale
+                width = evenPixels(CGFloat(d.width) * displayScale); height = evenPixels(CGFloat(d.height) * displayScale)
                 describe = "the whole desktop\(useSoftwareEncoder ? " (software encoder)" : "")"
                 title = "Whole Desktop"; kind = .desktop
             }
@@ -1520,8 +1523,9 @@ package final class StreamCoordinator {
                 if comeForward, !shuttingDown { activateAndRaise(window: w) }   // regular mode now: a pick comes forward
                 let fallback = "\(w.owningApplication?.applicationName ?? "?") — \(w.title ?? "")\(useSoftwareEncoder ? " (software encoder)" : "")"
                 do {
-                    try await startPipeline(source: source, filter: SCContentFilter(desktopIndependentWindow: w), sourceRect: nil,
-                                            width: evenPixels(w.frame.width * captureScale), height: evenPixels(w.frame.height * captureScale),
+                    let home = SCContentFilter(desktopIndependentWindow: w), homeScale = pixelScale(home)
+                    try await startPipeline(source: source, filter: home, sourceRect: nil,
+                                            width: evenPixels(w.frame.width * homeScale), height: evenPixels(w.frame.height * homeScale),
                                             describe: fallback, title: title, kind: kind)
                 } catch {
                     print("Could not start streaming \(fallback): \(error)")
@@ -1809,6 +1813,14 @@ package final class StreamCoordinator {
 
     /// Retina normally; points when the software encoder is carrying the stream.
     private var captureScale: CGFloat { useSoftwareEncoder ? min(scale, 1.0) : scale }
+
+    /// Porthole (30 Oct): the capture scale for what this filter shows, never finer than its screen.
+    /// ScreenCaptureKit draws a window at its screen's own pixels, so a window on a 1× monitor (a 2560×1440
+    /// Samsung) captured at 2× filled only the top-left quarter of the frame, and so did the Desktop.
+    private func pixelScale(_ filter: SCContentFilter) -> CGFloat {
+        let screen = CGFloat(filter.pointPixelScale)
+        return screen > 0 ? min(captureScale, screen) : captureScale
+    }
 
     /// "Safari — Apple Developer" for the app's menu; just the app for an untitled window.
     private static func menuTitle(for w: SCWindow) -> String {
@@ -2315,12 +2327,20 @@ package final class StreamCoordinator {
                 return
             }
             // The encoder is fixed to one size, so a resized window means a fresh pipeline.
-            if let scw = catalog.window(id: id),
-               evenPixels(scw.frame.width * captureScale) != encoderWidth || evenPixels(scw.frame.height * captureScale) != encoderHeight {
+            // Porthole: at its screen's scale now, so a move to a screen of another density restarts it too.
+            if let scw = catalog.window(id: id), case let scale = pixelScale(SCContentFilter(desktopIndependentWindow: scw)),
+               evenPixels(scw.frame.width * scale) != encoderWidth || evenPixels(scw.frame.height * scale) != encoderHeight {
                 _ = w
                 await select(active)
                 return
             }
+        }
+        // Porthole (30 Oct): the Desktop's screen changed size or density (another monitor, a new mode).
+        if active == .desktop, !synthetic, encoder != nil, let d = catalog.display,
+           case let scale = pixelScale(SCContentFilter(display: d, excludingWindows: [])),
+           evenPixels(CGFloat(d.width) * scale) != encoderWidth || evenPixels(CGFloat(d.height) * scale) != encoderHeight {
+            await select(active)
+            return
         }
         broadcastList()
     }

@@ -63,7 +63,8 @@ final class PortholeSessions {
         ttyCache = ttyCache.filter { live.contains($0.key) }
         let ttys = ttyCache
         var byTTY = Dictionary(iterm.map { ($0.tty, $0) }, uniquingKeysWith: { a, _ in a })
-        let missing = agents.contains { a in ttys[a.pid].map { byTTY[$0] == nil } ?? false }
+        let codex = PortholeCodex.sessions()
+        let missing = agents.contains { a in ttys[a.pid].map { byTTY[$0] == nil } ?? false } || codex.contains { byTTY[$0.tty] == nil }
         if missing || Date().timeIntervalSince(itermAt) > 10 {
             iterm = Self.itermSessions()
             itermAt = Date()
@@ -81,10 +82,25 @@ final class PortholeSessions {
                                           state: state, since: model?.since(for: state), windowID: terminal?.windowID,
                                           windowNumber: nil, terminalID: terminal?.uniqueID, preview: model?.preview))
         }
+        // Porthole (30 Oct): Codex's sessions in a terminal, read from their own logs (PortholeCodex).
+        for found in codex {
+            let terminal = byTTY[found.tty]
+            var model: PortholeTranscript?
+            if let log = found.log {
+                files[found.id] = log
+                model = probe(sessionID: found.id)
+            }
+            let place = Self.portal(for: found.cwd ?? home, home: home)
+            let state = model.map { $0.state(status: $0.codexStatus) } ?? .idle
+            sessions.append(ClaudeSession(id: found.id, title: PortholeCodex.title(terminal: terminal?.title, firstPrompt: model?.codexFirstPrompt),
+                                          portal: place.portal, folder: place.folder, state: state, since: model?.since(for: state),
+                                          windowID: terminal?.windowID, windowNumber: nil, terminalID: terminal?.uniqueID,
+                                          preview: model?.preview, agent: ClaudeSession.codex))
+        }
         let list = SessionList(sessions: Self.ordered(sessions), windowOrder: Self.frontToBack())
         byID = Dictionary(list.sessions.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         // Forget the followers of sessions that ended, so a long run does not keep every transcript.
-        let ids = Set(agents.map(\.sessionId))
+        let ids = Set(agents.map(\.sessionId) + codex.map(\.id))
         followers = followers.filter { ids.contains($0.key) }
         lastSnapshot = list
         return list
@@ -251,8 +267,9 @@ final class PortholeSessions {
         }
     }
 
-    /// Runs a tool and returns its standard output, or nil if it fails or overruns `timeout` seconds.
-    static func run(_ tool: String, _ args: [String], timeout: TimeInterval) -> Data? {
+    /// Runs a tool and returns its standard output, or nil if it fails (unless `allowFailure`) or overruns
+    /// `timeout` seconds.
+    static func run(_ tool: String, _ args: [String], timeout: TimeInterval, allowFailure: Bool = false) -> Data? {
         final class Box: @unchecked Sendable { var data = Data() }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: tool)
@@ -276,6 +293,6 @@ final class PortholeSessions {
             return nil
         }
         _ = read.wait(timeout: .now() + 2)
-        return p.terminationStatus == 0 ? box.data : nil
+        return p.terminationStatus == 0 || allowFailure ? box.data : nil
     }
 }

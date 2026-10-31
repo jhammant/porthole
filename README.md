@@ -16,6 +16,7 @@ Two apps:
 - **Claude Code sessions in a sidebar**, grouped and sorted with the ones that need you first. A session
   opens its terminal window, fitted to your screen, or as **text** in its own colours (sharp at any link
   speed), or as text with **Claude Code's agent view** beside it. The agent view is also one tap away.
+  **OpenAI Codex** sessions in a terminal show up too, tagged Codex.
 - **Any Mac app**: its windows, Chrome's tabs, your favourite apps with their own hot keys (long-press to
   add, reorder or re-key them), every installed app, and the whole screen, on any of your Mac's displays.
 - **Tiles**: two windows side by side, or four in a grid.

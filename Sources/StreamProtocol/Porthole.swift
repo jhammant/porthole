@@ -36,13 +36,21 @@ public struct ClaudeSession: Codable, Hashable, Identifiable, Sendable {
     public var terminalID: String?
     /// The last thing Claude wrote, one line, at most `PortholeWire.previewLength` characters.
     public var preview: String?
+    /// Porthole (30 Oct, "support codex as well as claude code"): the agent running in it, `codex` for an
+    /// OpenAI Codex session; nil for Claude Code (and from hosts before Codex).
+    public var agent: String?
 
     public init(id: String, title: String, portal: String, folder: String, state: State, since: Double? = nil,
-                windowID: UInt32? = nil, windowNumber: Int? = nil, terminalID: String? = nil, preview: String? = nil) {
+                windowID: UInt32? = nil, windowNumber: Int? = nil, terminalID: String? = nil, preview: String? = nil,
+                agent: String? = nil) {
         self.id = id; self.title = title; self.portal = portal; self.folder = folder; self.state = state
         self.since = since; self.windowID = windowID; self.windowNumber = windowNumber
-        self.terminalID = terminalID; self.preview = preview
+        self.terminalID = terminalID; self.preview = preview; self.agent = agent
     }
+
+    public static let codex = "codex"
+    /// The agent's name for the device's words: "Codex" or "Claude".
+    public var agentName: String { agent == Self.codex ? "Codex" : "Claude" }
 }
 
 public struct SessionList: Codable, Sendable, Equatable {

@@ -104,7 +104,7 @@ final class PortholeAnywhereHost: @unchecked Sendable {
         let here = Set(connected.values)
         for r in registrations.values where !here.contains(r.token) && r.lapsed != true {
             let body: [String: Any] = ["device": r.token, "env": r.env, "jws": r.jws, "session": s.id,
-                                       "title": "\(s.title) needs you", "body": s.preview ?? "Claude is waiting for you."]
+                                       "title": "\(s.title) needs you", "body": s.preview ?? "\(s.agentName) is waiting for you."]
             var request = URLRequest(url: Self.endpoint)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")

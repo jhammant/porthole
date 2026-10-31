@@ -310,8 +310,8 @@ final class PortholeHost: @unchecked Sendable {
         if session.state == .working, reply.key != .esc {
             held.append(Held(reply: reply, connection: connection, since: now))
             server.send(Self.message(.replyResult, ReplyResult(sessionID: reply.sessionID, token: reply.token, ok: false, queued: true,
-                                                                reason: "Sent when Claude finishes.")), to: connection)
-            print("Porthole: reply to \(SafeText.label(session.title)) held until Claude finishes")
+                                                                reason: "Sent when \(session.agentName) finishes.")), to: connection)
+            print("Porthole: reply to \(SafeText.label(session.title)) held until \(session.agentName) finishes")
             return
         }
         type(reply, into: session, answering: connection)
@@ -326,7 +326,7 @@ final class PortholeHost: @unchecked Sendable {
         for h in held {
             guard let session = sessions.byID[h.reply.sessionID] else {
                 server.send(Self.message(.replyResult, ReplyResult(sessionID: h.reply.sessionID, token: h.reply.token, ok: false,
-                                                                    reason: "That session ended before Claude finished.")), to: h.connection)
+                                                                    reason: "That session ended before it finished.")), to: h.connection)
                 continue
             }
             if session.state == .working {

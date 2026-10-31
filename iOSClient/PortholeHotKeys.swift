@@ -10,6 +10,7 @@ import UIKit
 ///   ⌃⌥← / →   back / forward, as a browser's, through what was on screen (PortholeBackForward)
 ///   ⌃⌥1–9     the session in iTerm window 1–9 (else the nth)
 ///   ⌘` / ⌘⇧`  next / previous window of the app on screen
+///   ⌃↓ / ⌃↑   App Exposé (the app's windows) / Mission Control (every window), as on the Mac (PortholeExpose)
 ///   ⌃⌥] / [   next / previous app      ⌃⌥G        one window, two tiles, four tiles
 ///   ⌃⌥S       show or hide the sidebar   ⌃⌥B        show or hide the top bar
 ///   ⌃⌥V       Claude Code's agent view as text   ⌃⌥T        a session as text or as its window
@@ -30,11 +31,15 @@ enum PortholeHotKeys {
         case switcher, nextNeedingYou, nextSession, previousSession, session(Int)
         case nextWindow, previousWindow, nextAppWindow, previousAppWindow, nextApp, previousApp, tiles, sidebar, topBar
         case flip, flipFurther, app(String), back, forward, agentView, textMode, searchSessions, desktop
+        case appExpose, missionControl
     }
 
     /// Set by the connected screen (PortholeShell).
     @MainActor static var handler: ((Action) -> Void)?
     @MainActor private static var last: (action: Action, at: CFAbsoluteTime)?
+    /// Porthole (30 Oct): while the exposé is up, every key is offered to it first (down or up); true
+    /// when it took the key, which then reaches neither a hot key nor the Mac.
+    @MainActor static var modal: ((UIKey, Bool) -> Bool)?
 
     @MainActor static func fire(_ action: Action) {
         let now = CFAbsoluteTimeGetCurrent()
@@ -49,6 +54,9 @@ enum PortholeHotKeys {
         let shift = flags.contains(.shift)
         // ⌘` / ⌘⇧`: the Mac's own way through an app's windows.
         if flags.subtracting(.shift) == .command, key.keyCode == .keyboardGraveAccentAndTilde { return shift ? .previousAppWindow : .nextAppWindow }
+        // ⌃↓ / ⌃↑: the Mac's App Exposé and Mission Control (30 Oct: "Same as the mac options").
+        if flags == .control, key.keyCode == .keyboardDownArrow { return .appExpose }
+        if flags == .control, key.keyCode == .keyboardUpArrow { return .missionControl }
         guard flags.contains(.control), flags.contains(.alternate), !flags.contains(.command) else { return nil }
         if !shift, let fav = PortholeFavourites.app(forKey: key.charactersIgnoringModifiers) { return .app(fav.bundleID) }
         switch key.keyCode {
@@ -86,11 +94,13 @@ enum PortholeHotKeys {
     /// actions fire on the way down; the way up only keeps the release from the Mac too.
     @MainActor static func claim(_ presses: Set<UIPress>, down: Bool) -> Set<UIPress> {
         guard handler != nil else { return [] }
-        let mine = presses.filter { $0.key.flatMap(action(for:)) != nil }
-        if down {
-            for press in mine {
-                if let key = press.key, let action = action(for: key) { fire(action) }
-            }
+        var mine: Set<UIPress> = []
+        for press in presses {
+            guard let key = press.key else { continue }
+            if let modal, modal(key, down) { mine.insert(press); continue }
+            guard let action = action(for: key) else { continue }
+            mine.insert(press)
+            if down { fire(action) }
         }
         return mine
     }
@@ -117,6 +127,8 @@ struct PortholeKeyCommands: View {
             key("Previous app", "[", .previousApp)
             Button("Next window of this app") { PortholeHotKeys.fire(.nextAppWindow) }.keyboardShortcut("`", modifiers: .command)
             Button("Previous window of this app") { PortholeHotKeys.fire(.previousAppWindow) }.keyboardShortcut("`", modifiers: [.command, .shift])
+            Button("App Exposé") { PortholeHotKeys.fire(.appExpose) }.keyboardShortcut(.downArrow, modifiers: .control)
+            Button("Mission Control") { PortholeHotKeys.fire(.missionControl) }.keyboardShortcut(.upArrow, modifiers: .control)
             key("Tiles", "g", .tiles)
             key("Show or hide the sidebar", "s", .sidebar)
             key("Show or hide the top bar", "b", .topBar)

@@ -49,6 +49,15 @@ struct PortholeTranscript {
     private(set) var openAskAt: Double?
     /// When the current turn began, for the Working list's order (stable while it runs).
     private(set) var turnStartAt: Double?
+    /// Porthole (30 Oct, "support codex as well as claude code"): an OpenAI Codex session log
+    /// (~/.codex/sessions/…/rollout-*.jsonl) read by the same model. Its records (`session_meta`, `event_msg`,
+    /// `response_item`) share no type with Claude Code's. Codex has no `claude agents`: its task running and a
+    /// question or approval it waits on come from the log itself (`codexStatus`).
+    private(set) var codexBusy = false
+    private(set) var codexWaiting = false
+    private(set) var codexFirstPrompt: String?
+    /// `claude agents`' word for a Codex session: waiting, busy or idle.
+    var codexStatus: String { codexWaiting ? "waiting" : codexBusy ? "busy" : "idle" }
     /// Entries kept in memory (the newest).
     let keep: Int
 
@@ -143,9 +152,125 @@ struct PortholeTranscript {
                 }
             }
             return added
+        case "event_msg":
+            return codexEvent(record["payload"] as? [String: Any] ?? [:], at: at)
+        case "response_item":
+            return codexItem(record["payload"] as? [String: Any] ?? [:], at: at)
         default:
             return []
         }
+    }
+
+    // MARK: Codex
+
+    private mutating func codexEvent(_ p: [String: Any], at: Double?) -> [TranscriptEntry] {
+        let type = p["type"] as? String ?? ""
+        switch type {
+        case "task_started":
+            codexBusy = true; turnOver = false
+            turnStartAt = at
+            return []
+        case "task_complete":
+            codexBusy = false; codexWaiting = false; turnOver = true
+            if case .claude(let text) = tail, Self.asks(text) { openAskAt = openAskAt ?? tailAt }
+            return []
+        case "turn_aborted":
+            codexBusy = false; codexWaiting = false; turnOver = true
+            openAskAt = nil
+            tail = .you; tailAt = at
+            return [add(.tool, "Interrupted by you", at: at)]
+        case "user_message":
+            return codexPrompt(Self.codexText(p["message"]), at: at)
+        case "agent_message":
+            return codexSays(Self.codexText(p["message"]), at: at)
+        case "item_completed":
+            // Items happen only inside a task: one after the last task_complete means a task runs, even when
+            // its task_started is further back than the window read (a long task writes megabytes).
+            codexBusy = true
+            let item = p["item"] as? [String: Any] ?? [:]
+            switch item["type"] as? String {
+            case "UserMessage": return codexPrompt(Self.codexText(item["content"]), at: at)
+            case "AgentMessage": return codexSays(Self.codexText(item["content"]), at: at)
+            case "CommandExecution": return codexTool("Shell", Self.codexCommand(item), at: at)
+            case "McpToolCall": return codexTool(item["server"] as? String ?? "MCP", item["tool"] as? String ?? "", at: at)
+            case "FileChange": return codexTool("Edit", Self.codexFiles(item), at: at)
+            case "Extension": return codexTool("Search", item["query"] as? String ?? "", at: at)
+            default: return []
+            }
+        case "error":
+            let text = Self.codexText(p["message"])
+            tail = .error(text.isEmpty ? "Codex hit an error" : text); tailAt = at
+            return []
+        default:
+            // A command or a patch waiting for your yes, or Codex asking you something.
+            guard type.hasSuffix("approval_request") || type == "request_user_input" || type == "elicitation_request" else { return [] }
+            codexWaiting = true
+            openAskAt = openAskAt ?? at
+            tail = .toolPending("Approval"); tailAt = at
+            return [add(.tool, "Waiting for your approval", at: at)]
+        }
+    }
+
+    /// The model's own items: only its questions to you (request_user_input) are of use here; its words and
+    /// tools come as `item_completed` events.
+    private mutating func codexItem(_ p: [String: Any], at: Double?) -> [TranscriptEntry] {
+        guard p["type"] as? String == "function_call", (p["name"] as? String ?? "").hasPrefix("request_user_input"),
+              let raw = (p["arguments"] as? String)?.data(using: .utf8),
+              let args = try? JSONSerialization.jsonObject(with: raw) as? [String: Any],
+              let q = (args["questions"] as? [[String: Any]])?.first else { return [] }
+        let text = (q["title"] as? String) ?? (q["question"] as? String) ?? "Codex has a question"
+        let options = (q["options"] as? [Any])?.compactMap { ($0 as? String) ?? (($0 as? [String: Any])?["label"] as? String) }
+        codexWaiting = true
+        openAskAt = openAskAt ?? at
+        tail = .toolPending("Question"); tailAt = at
+        return [add(.question, text, options: options?.isEmpty == false ? options : nil, at: at)]
+    }
+
+    private mutating func codexPrompt(_ raw: String, at: Double?) -> [TranscriptEntry] {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Codex's own context, written as your message by older versions.
+        guard !text.isEmpty, !text.hasPrefix("<environment_context>"), !text.hasPrefix("<user_instructions>") else { return [] }
+        if codexFirstPrompt == nil { codexFirstPrompt = text }
+        codexWaiting = false
+        if turnOver || turnStartAt == nil { turnStartAt = at }
+        turnOver = false
+        openAskAt = nil
+        tail = .you; tailAt = at
+        return [add(.you, text, at: at)]
+    }
+
+    private mutating func codexSays(_ raw: String, at: Double?) -> [TranscriptEntry] {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return [] }
+        lastClaudeText = text
+        tail = .claude(text); tailAt = at
+        return [add(.claude, text, at: at)]
+    }
+
+    private mutating func codexTool(_ name: String, _ detail: String, at: Double?) -> [TranscriptEntry] {
+        // A tool ran: the approval it waited on was given.
+        if codexWaiting { openAskAt = nil }
+        codexWaiting = false
+        tail = .toolDone; tailAt = at
+        let line = detail.isEmpty ? name : "\(name): \(detail)"
+        return [add(.tool, String(line.prefix(160)), at: at)]
+    }
+
+    /// A Codex message's words: a string, or content blocks with `text`.
+    static func codexText(_ content: Any?) -> String {
+        if let s = content as? String { return s }
+        return (content as? [[String: Any]] ?? []).compactMap { $0["text"] as? String }.joined(separator: "\n")
+    }
+
+    static func codexCommand(_ item: [String: Any]) -> String {
+        if let parsed = item["parsed_cmd"] as? [[String: Any]], let cmd = parsed.first?["cmd"] as? String { return cmd }
+        if let parts = item["command"] as? [String] { return parts.last ?? "" }
+        return item["command"] as? String ?? ""
+    }
+
+    static func codexFiles(_ item: [String: Any]) -> String {
+        let names = ((item["changes"] as? [String: Any])?.keys.map { ($0 as NSString).lastPathComponent } ?? []).sorted()
+        return names.prefix(3).joined(separator: ", ") + (names.count > 3 ? " and \(names.count - 3) more" : "")
     }
 
     private mutating func you(_ raw: String, at: Double?) -> [TranscriptEntry] {

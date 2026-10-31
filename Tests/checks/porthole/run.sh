@@ -7,7 +7,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 source "$here/../common.sh"
 T=$(mktemp -d)
 cp Sources/StreamProtocol/*.swift "$T/"
-for f in PortholeTranscript PortholeSessions; do sed '/^import StreamProtocol$/d' "Sources/PortholeHost/$f.swift" > "$T/$f.swift"; done
+for f in PortholeTranscript PortholeSessions PortholeCodex; do sed '/^import StreamProtocol$/d' "Sources/PortholeHost/$f.swift" > "$T/$f.swift"; done
 cp "$here/main.swift" "$T/main.swift"
 swiftc -O -package-name porthole "$T"/*.swift -o "$out/check"
 rm -rf "$T"

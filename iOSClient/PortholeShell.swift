@@ -14,6 +14,8 @@ struct PortholeShell: View {
     @State private var pick: PortholePick = .apps
     @State private var sidebarShown = true
     @State private var switcherShown = false
+    /// ⌃↓ App Exposé and ⌃↑ Mission Control (PortholeExpose).
+    @StateObject private var expose = PortholeExposeModel()
     @State private var tilePickerShown = false
     @State private var compactPath: [PortholePick] = []
     /// The sidebar's width as last dragged (the divider), kept across launches.
@@ -59,11 +61,13 @@ struct PortholeShell: View {
                         detail
                             // Over the content, not the sidebar: on the Duo as a book, the right half.
                             .overlay { if switcherShown { PortholeSwitcher(client: client, shown: $switcherShown, open: open) } }
+                            .overlay { if !compact { PortholeExpose(client: client, model: expose) } }
                     }
                 }
                 if compact && switcherShown {
                     PortholeSwitcher(client: client, shown: $switcherShown, open: open)
                 }
+                if compact { PortholeExpose(client: client, model: expose) }
             }
         }
         .background(PortholeStyle.ground.ignoresSafeArea())
@@ -81,6 +85,7 @@ struct PortholeShell: View {
         }
         .onAppear {
             PortholeHotKeys.handler = { action in handle(action) }
+            expose.choose = { id in openWindow(id) }
             // Porthole Anywhere: a tapped notification opens its session; the Mac gets this device's token.
             // A session not listed yet (the app just started from the notification) opens when the list has it.
             anywhere.openSession = { id in
@@ -110,6 +115,18 @@ struct PortholeShell: View {
             // -PortholeFind WORDS: the session opens as text at its words (the pane's find, as a search hit does).
             if let s, let q = UserDefaults.standard.string(forKey: "PortholeFind"), let t = s.terminalID { client.porthole.pendingFind[t] = q }
             if let s { open(.session(s.id)) }
+        }
+        // -PortholeExpose app|all: App Exposé or Mission Control once the windows are listed (simulator runs).
+        .onChange(of: client.windows.isEmpty, initial: true) { _, empty in
+            guard !empty, let how = UserDefaults.standard.string(forKey: "PortholeExpose"), expose.mode == nil else { return }
+            showExpose(how == "all" ? .all : exposeApp.map { .app($0) })
+            // -PortholeExposeKeys "right down return": those keys, a second apart, from 2 s on.
+            let keys: [String: UIKeyboardHIDUsage] = ["left": .keyboardLeftArrow, "right": .keyboardRightArrow, "up": .keyboardUpArrow,
+                                                      "down": .keyboardDownArrow, "return": .keyboardReturnOrEnter, "esc": .keyboardEscape]
+            let script = (UserDefaults.standard.string(forKey: "PortholeExposeKeys") ?? "").split(separator: " ").compactMap { keys[String($0)] }
+            for (i, code) in script.enumerated() {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2 + Double(i)) { print("porthole: expose key \(code.rawValue)"); expose.press(code) }
+            }
         }
         // -PortholeSwitcher WORDS: the quick switcher open with its words typed (simulator runs).
         .onAppear { if UserDefaults.standard.string(forKey: "PortholeSwitcher") != nil { switcherShown = true } }
@@ -283,6 +300,20 @@ struct PortholeShell: View {
         }
     }
 
+    /// The app App Exposé shows: the one on screen, else (the Desktop, nothing yet) the most recent window's.
+    private var exposeApp: String? {
+        if case .window(let id) = onScreen, let w = client.windows.first(where: { $0.id == id }) { return w.bundleID }
+        return client.recentWindows.first?.bundleID
+    }
+
+    /// The exposé in that mode, or closed when it already shows it (the same key again, as on the Mac).
+    private func showExpose(_ mode: PortholeExpose.Mode?) {
+        guard let mode, expose.mode != mode else { expose.close(); return }
+        var current: UInt32?
+        if case .window(let id) = onScreen { current = id }
+        expose.show(mode, windows: client.windows, current: current)
+    }
+
     /// The Desktop streaming in the detail (not a session's text over it).
     private var onDesktop: Bool { pick == .apps && client.active == .desktop }
 
@@ -371,6 +402,8 @@ struct PortholeShell: View {
             switcherShown.toggle()
         case .desktop:
             toggleDesktop()
+        case .appExpose, .missionControl:
+            showExpose(action == .missionControl ? .all : exposeApp.map { .app($0) })
         case .searchSessions:
             // The sidebar's search, in sight and with the keyboard.
             if !sidebarShown { withAnimation(.easeOut(duration: 0.18)) { sidebarShown = true } }
@@ -855,7 +888,7 @@ struct PortholeSidebar: View {
 
     /// The keys worth knowing, at the foot of the list; holding ⌘ shows every one (PortholeKeyCommands).
     private var keysHint: some View {
-        Text("⌃⌥↓ ↑ next or previous window · ⌃⌥← → back or forward · ⌃⌥D Desktop · ⌃⌥V agent view · ⌃⌥Space find · ⌃⌥/ search · hold ⌘ for every key")
+        Text("⌃⌥↓ ↑ next or previous window · ⌃⌥← → back or forward · ⌃⌥D Desktop · ⌃↓ App Exposé · ⌃↑ Mission Control · ⌃⌥V agent view · ⌃⌥Space find · ⌃⌥/ search · hold ⌘ for every key")
             .font(PortholeType.ui(11)).foregroundStyle(PortholeStyle.muted)
             .padding(.top, 16).padding(.horizontal, 6)
     }
@@ -877,8 +910,10 @@ struct PortholeSidebar: View {
         let selected = pick.sessionID == s.id
         let needs = s.state == .needsYou
         let windowless = s.windowID == nil
+        let codex = s.agent == ClaudeSession.codex
         // A background session has no window: it lives in the agent view, which opens instead (22 Oct review).
-        return Button { open(windowless ? .agentView : .session(s.id)) } label: {
+        // Codex outside iTerm has neither (the agent view is Claude Code's).
+        return Button { open(windowless ? (codex ? .apps : .agentView) : .session(s.id)) } label: {
             HStack(alignment: .top, spacing: 11) {
                 PortholeStateDot(state: s.state).padding(.top, needs ? 5 : 4)
                 VStack(alignment: .leading, spacing: 3) {
@@ -890,8 +925,16 @@ struct PortholeSidebar: View {
                             Text(w).font(PortholeType.ui(11, mono: true)).foregroundStyle(PortholeStyle.brass)
                         }
                     }
-                    Text(windowless ? "\(s.portal) · in the background · opens the agent view" : s.portal)
-                        .font(PortholeType.ui(11.5)).foregroundStyle(PortholeStyle.muted)
+                    HStack(spacing: 6) {
+                        // Porthole (30 Oct): a Codex session among Claude Code's, marked as such.
+                        if codex {
+                            Text("Codex").font(PortholeType.ui(10, .semibold)).foregroundStyle(PortholeStyle.text)
+                                .padding(.horizontal, 6).padding(.vertical, 1)
+                                .background(PortholeStyle.field, in: Capsule())
+                        }
+                        Text(windowless ? (codex ? "\(s.portal) · not in iTerm" : "\(s.portal) · in the background · opens the agent view") : s.portal)
+                            .font(PortholeType.ui(11.5)).foregroundStyle(PortholeStyle.muted)
+                    }
                     if needs, let p = s.preview {
                         Text(p).font(PortholeType.ui(12.5)).foregroundStyle(PortholeStyle.soft).lineLimit(2)
                     }
@@ -905,7 +948,7 @@ struct PortholeSidebar: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(s.title), \(s.portal), \(Self.stateWords(s))")
+        .accessibilityLabel("\(s.title), \(codex ? "Codex, " : "")\(s.portal), \(Self.stateWords(s))")
     }
 
     /// The favourite apps (PortholeFavourites), open or not, each a tap or ⌃⌥ letter away.
