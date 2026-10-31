@@ -90,6 +90,31 @@ enum PortholeHotKeys {
         }
     }
 
+    /// Porthole (31 Oct, "The cmd shortcut didn't seem to do anything"): the shortcuts iPadOS has uses of its
+    /// own for (⌘` steps through an app's windows there), as key commands asking for priority over the
+    /// system, so they can reach Porthole before iPadOS takes them. The stream's input view and a session's
+    /// text list them while first responder; `fire` drops a second firing within 80 ms, so a key that also
+    /// reaches pressesBegan acts once.
+    @MainActor static let priorityCommands: [UIKeyCommand] = [
+        ("`", UIKeyModifierFlags.command), ("`", [.command, .shift]),
+        (UIKeyCommand.inputDownArrow, .control), (UIKeyCommand.inputUpArrow, .control),
+    ].map { input, flags in
+        let command = UIKeyCommand(input: input, modifierFlags: flags, action: #selector(UIResponder.portholePriorityKey(_:)))
+        command.wantsPriorityOverSystemBehavior = true
+        return command
+    }
+
+    /// The action of one of `priorityCommands`.
+    static func action(input: String?, flags: UIKeyModifierFlags) -> Action? {
+        switch (input, flags.intersection([.control, .alternate, .shift, .command])) {
+        case ("`", .command): return .nextAppWindow
+        case ("`", [.command, .shift]): return .previousAppWindow
+        case (UIKeyCommand.inputDownArrow, .control): return .appExpose
+        case (UIKeyCommand.inputUpArrow, .control): return .missionControl
+        default: return nil
+        }
+    }
+
     /// From InputOverlayView: the presses that are Porthole's, taken out of what goes to the Mac. Their
     /// actions fire on the way down; the way up only keeps the release from the Mac too.
     @MainActor static func claim(_ presses: Set<UIPress>, down: Bool) -> Set<UIPress> {
@@ -175,5 +200,12 @@ enum PortholeFavourites {
         var l = list
         change(&l)
         list = l
+    }
+}
+
+extension UIResponder {
+    /// Porthole: one of `PortholeHotKeys.priorityCommands` reached this responder.
+    @objc func portholePriorityKey(_ command: UIKeyCommand) {
+        if let action = PortholeHotKeys.action(input: command.input, flags: command.modifierFlags) { PortholeHotKeys.fire(action) }
     }
 }

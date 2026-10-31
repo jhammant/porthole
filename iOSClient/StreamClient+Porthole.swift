@@ -109,9 +109,14 @@ extension StreamClient {
             guard let screen = Wire.decode(TerminalScreen.self, from: data), porthole.terminalPanes[screen.terminalID] != nil else { return }
             var state = porthole.terminals[screen.terminalID] ?? PortholeTerminalState(id: screen.terminalID, columns: screen.columns, rows: screen.rows, lines: [])
             if screen.full || state.id != screen.terminalID || state.rows != screen.rows {
+                // The version carries on through a fresh screen: the pane redraws only when it changes, and
+                // every scrolled screen comes full, so each reset to 1 left the pane on the first one (31 Oct,
+                // "can't scroll up").
+                let version = state.version
                 state = PortholeTerminalState(id: screen.terminalID, columns: screen.columns, rows: screen.rows,
                                               lines: Array(repeating: "", count: screen.rows))
                 state.runs = Array(repeating: [], count: screen.rows)
+                state.version = version
             }
             state.columns = screen.columns
             state.cursor = (screen.cursorX >= 0 && screen.cursorY >= 0) ? PortholeTerminalState.Cell(x: screen.cursorX, y: screen.cursorY) : nil
@@ -241,6 +246,12 @@ extension StreamClient {
             if let q = find?.query { porthole.terminals[terminalID]?.find = PortholeDemo.find(q, in: porthole.terminals[terminalID]) }
             return
         }
+        var fit = fit
+        #if DEBUG
+        // -PortholeNoFit 1: watch a session at its own size (simulator runs against a test host on the Mac, which
+        // would otherwise resize the real iTerm session to the simulator's pane).
+        if UserDefaults.standard.bool(forKey: "PortholeNoFit") { fit = nil }
+        #endif
         send(.watchTerminal, payload: Wire.encode(TerminalRequest(terminalID: terminalID, windowID: windowID,
                                                                    fitColumns: fit?.columns, fitRows: fit?.rows,
                                                                    colours: Self.textColours)))

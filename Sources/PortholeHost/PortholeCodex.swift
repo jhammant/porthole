@@ -113,8 +113,10 @@ enum PortholeCodex {
 
     /// What a log's first line says: its folder, and whether a terminal session wrote it (not `codex exec`).
     struct Meta { let cwd: String; let terminal: Bool }
-    /// First lines never change: read once per log. Only touched from the sessions queue.
+    /// First lines never change: read once per log. Behind a lock: the device's list and Anywhere's take
+    /// their snapshots on queues of their own (31 Oct: a test host crashed writing it from both at once).
     nonisolated(unsafe) private static var metas: [String: Meta] = [:]
+    private static let metasLock = NSLock()
 
     /// The last week's logs from terminal sessions, newest first.
     static func recentLogs(now: Date = Date()) -> [(url: URL, cwd: String)] {
@@ -128,9 +130,11 @@ enum PortholeCodex {
             let folder = root.appendingPathComponent(String(format: "%04d/%02d/%02d", y, m, d))
             for url in (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
             where url.lastPathComponent.hasPrefix("rollout-") && url.pathExtension == "jsonl" {
-                let meta = metas[url.path] ?? readMeta(url)
-                guard let meta else { continue }
-                metas[url.path] = meta
+                metasLock.lock()
+                let known = metas[url.path]
+                metasLock.unlock()
+                guard let meta = known ?? readMeta(url) else { continue }
+                if known == nil { metasLock.lock(); metas[url.path] = meta; metasLock.unlock() }
                 guard meta.terminal else { continue }
                 let at = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
                 logs.append((url, meta.cwd, at))

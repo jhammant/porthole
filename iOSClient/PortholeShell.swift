@@ -589,7 +589,14 @@ struct PortholeSidebar: View {
     /// Sessions as their windows, as text, or as text with the agent view beside (PortholeTextSwitch, ⌃⌥T).
     var sessionsMode: PortholeTextSwitch.Mode = .window
     var setMode: (PortholeTextSwitch.Mode) -> Void = { _ in }
-    @State private var expanded: Set<String> = []
+    /// Porthole (31 Oct, "the expand of sub apps seems to disappear a bit"): the apps opened to list their
+    /// windows, kept outside this view and across launches, since the narrow layout builds the sidebar
+    /// anew each time it comes back to it.
+    @ObservedObject private var expansion = PortholeSidebarExpansion.shared
+    private var expanded: Set<String> {
+        get { expansion.apps }
+        nonmutating set { expansion.apps = newValue }
+    }
     @State private var allAppsShown = false
     /// Read so Your apps follows Jon's edits (PortholeFavourites).
     @AppStorage(PortholeFavourites.storageKey) private var favourites: Data?
@@ -1322,4 +1329,14 @@ struct PortholeColoursSwitch: View {
 extension SessionSearchHits {
     /// The sidebar's id for a search result's group, apart from the session's own row.
     var searchRowID: String { "search:" + sessionID }
+}
+
+/// The sidebar's opened apps (PortholeSidebar's `expanded`), remembered on this device.
+@MainActor final class PortholeSidebarExpansion: ObservableObject {
+    static let shared = PortholeSidebarExpansion()
+    private static let key = "Porthole.sidebarExpanded"
+    @Published var apps: Set<String> {
+        didSet { UserDefaults.standard.set(Array(apps).sorted(), forKey: Self.key) }
+    }
+    private init() { apps = Set(UserDefaults.standard.stringArray(forKey: Self.key) ?? []) }
 }

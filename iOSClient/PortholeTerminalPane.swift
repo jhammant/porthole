@@ -181,7 +181,7 @@ private struct PortholeTerminalRepresentable: UIViewRepresentable {
 }
 
 /// The grid itself: draws the screen and takes the keyboard.
-final class PortholeTerminalView: UIView, UIKeyInput {
+final class PortholeTerminalView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     var send: (String) -> Void = { _ in }
     /// Porthole (22 Oct, "scroll the window up with two fingers"): the lines up from the live screen the
     /// pane wants, as one or two fingers, a trackpad or a mouse's wheel move it; and ⌘F's find.
@@ -199,6 +199,7 @@ final class PortholeTerminalView: UIView, UIKeyInput {
         addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped)))
         addGestureRecognizer(UILongPressGestureRecognizer(target: self, action: #selector(longPressed)))
         let pan = UIPanGestureRecognizer(target: self, action: #selector(panned))
+        pan.delegate = self
         pan.minimumNumberOfTouches = 1
         pan.maximumNumberOfTouches = 2
         pan.allowedScrollTypesMask = .all
@@ -206,7 +207,29 @@ final class PortholeTerminalView: UIView, UIKeyInput {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    @objc private func tapped() { becomeFirstResponder() }
+    @objc private func tapped() {
+        if selection != nil { selection = nil; return }
+        becomeFirstResponder()
+    }
+
+    /// While a selection is being dragged out the finger selects; it scrolls nothing.
+    override func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+        if g is UIPanGestureRecognizer, selecting { return false }
+        return super.gestureRecognizerShouldBegin(g)
+    }
+
+    // MARK: Porthole: selecting lines to copy (31 Oct, "I can't do multi line copy")
+
+    /// Held, then dragged: from the cell held to the cell under the finger, in reading order.
+    private var selection: (from: PortholeTextSelection.Cell, to: PortholeTextSelection.Cell)? { didSet { setNeedsDisplay() } }
+    private var selecting = false
+
+    private func cell(at p: CGPoint) -> PortholeTextSelection.Cell {
+        let inset = PortholeTerminalMetrics.inset
+        let rows = max((state?.rows ?? 1) - 1, 0)
+        return .init(row: min(max(Int(((p.y - inset) / metrics.cell.height).rounded(.down)), 0), rows),
+                     column: max(Int(((p.x - inset) / metrics.cell.width).rounded(.down)), 0))
+    }
 
     // MARK: Porthole: scrolling the session's history
 
@@ -285,6 +308,8 @@ final class PortholeTerminalView: UIView, UIKeyInput {
 
     func show(_ new: PortholeTerminalState) {
         guard new.version != state?.version || new.id != state?.id else { return }
+        // Scrolled elsewhere, the selected cells hold other words: let it go.
+        if selection != nil, !selecting, new.scrolledUp != state?.scrolledUp { selection = nil }
         state = new
         backgroundColor = matrix ? .black : UIColor(rgb: new.background)
         setNeedsDisplay()
@@ -341,6 +366,18 @@ final class PortholeTerminalView: UIView, UIKeyInput {
                     }
                     col += wide ? 2 : 1
                 }
+            }
+        }
+        // Porthole: the lines being selected to copy.
+        if let selection {
+            let (a, b) = PortholeTextSelection.ordered(selection.from, selection.to)
+            ctx.setFillColor(UIColor.systemBlue.withAlphaComponent(0.32).cgColor)
+            let lo = max(a.row, firstRow), hi = min(b.row, lastRow)
+            for row in lo...max(hi, lo) where row <= hi {
+                let start = row == a.row ? a.column : 0
+                let end = row == b.row ? min(b.column, state.columns - 1) : state.columns - 1
+                guard end >= start else { continue }
+                ctx.fill(CGRect(x: inset + CGFloat(start) * cw, y: inset + CGFloat(row) * ch, width: CGFloat(end - start + 1) * cw, height: ch))
             }
         }
         // Porthole: the find's matches on this screen, the one shown brighter.
@@ -439,24 +476,50 @@ final class PortholeTerminalView: UIView, UIKeyInput {
     }
 
     /// The screen's text (Copy from the long-press menu).
+    /// The selection, or the whole screen without one.
     override func copy(_ sender: Any?) {
         guard let state else { return }
+        if let selection {
+            UIPasteboard.general.string = PortholeTextSelection.text(state.lines, from: selection.from, to: selection.to, wide: Self.isWide)
+            self.selection = nil
+            return
+        }
         UIPasteboard.general.string = state.lines.map { $0.replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression) }
             .joined(separator: "\n").trimmingCharacters(in: .newlines)
     }
 
+    /// Porthole: ⌘` and the like ahead of iPadOS (PortholeHotKeys.priorityCommands).
+    override var keyCommands: [UIKeyCommand]? { (super.keyCommands ?? []) + (isFirstResponder ? PortholeHotKeys.priorityCommands : []) }
+
     override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(UIResponder.portholePriorityKey(_:)) { return true }
         if action == #selector(paste(_:)) { return UIPasteboard.general.hasStrings }
         if action == #selector(copy(_:)) { return state != nil }
         return false
     }
 
     @objc private func longPressed(_ g: UILongPressGestureRecognizer) {
-        guard g.state == .began else { return }
-        becomeFirstResponder()
         let at = g.location(in: self)
-        editMenu.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: at))
+        switch g.state {
+        case .began:
+            becomeFirstResponder()
+            selecting = true
+            let c = cell(at: at)
+            // Held still, the whole line; dragged on, from where the finger was held.
+            selection = (.init(row: c.row, column: 0), .init(row: c.row, column: Int.max))
+            anchor = c
+        case .changed:
+            guard let anchor else { return }
+            let c = cell(at: at)
+            if c != anchor { selection = (anchor, c) }
+        case .ended:
+            selecting = false
+            editMenu.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: at))
+        default:
+            selecting = false
+        }
     }
+    private var anchor: PortholeTextSelection.Cell?
 
     private lazy var editMenu: UIEditMenuInteraction = {
         let i = UIEditMenuInteraction(delegate: nil)

@@ -238,7 +238,16 @@ async def screen(connection, app, req):
             sc = await s.async_get_screen_contents()
             lines = [sc.line(i) for i in range(min(sc.number_of_lines, rows))]
             c = sc.cursor_coord
-            cx, cy, first = c.x, c.y - sc.number_of_lines_above_screen, base
+            # The cursor's line counts from the session's first line, as `base` does. number_of_lines_above_screen
+            # says 0 on this Mac's iTerm (31 Oct), which put the cursor hundreds of rows below the screen, so
+            # none was drawn. The first count that lands on the screen wins; none, no cursor.
+            cx, cy, first = c.x, -1, base
+            for above in (base, li.scrollback_buffer_height, sc.number_of_lines_above_screen):
+                if 0 <= c.y - above < rows:
+                    cy = c.y - above
+                    break
+            if cy < 0:
+                cx = -1
         else:
             lines = await s.async_get_contents(first, rows)
             cx, cy = -1, -1

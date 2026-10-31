@@ -765,8 +765,10 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     private var takesEscape: Bool { isFirstResponder && !EscapeKey.onScreen(in: window) }
 
     override var keyCommands: [UIKeyCommand]? {
-        guard takesEscape else { return super.keyCommands }
-        return (super.keyCommands ?? []) + Self.escapeCommands
+        // Porthole: ⌘` and the like ahead of iPadOS (PortholeHotKeys.priorityCommands).
+        let porthole = isFirstResponder ? PortholeHotKeys.priorityCommands : []
+        guard takesEscape else { return (super.keyCommands ?? []) + porthole }
+        return (super.keyCommands ?? []) + Self.escapeCommands + porthole
     }
 
     override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
