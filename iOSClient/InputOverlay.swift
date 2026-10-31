@@ -1035,6 +1035,9 @@ final class InputOverlayProxy {
     private func change(_ event: String, _ step: (inout HardwareKeyboardPolicy) -> [HardwareKeyboardPolicy.Action]) {
         let before = policy.hold
         let actions = step(&policy)
+        let line = "keyboard: \(event): \(before.rawValue) → \(policy.hold.rawValue)"
+            + (actions.isEmpty ? "" : "; " + actions.map(\.description).joined(separator: ", "))
+        MainActor.assumeIsolated { PortholeDebugRecorder.shared.note(line) }
         #if DEBUG
         if !actions.isEmpty || before != policy.hold {
             print("keyboard: \(event): \(before.rawValue) → \(policy.hold.rawValue)"

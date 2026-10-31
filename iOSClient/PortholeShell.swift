@@ -46,6 +46,10 @@ struct PortholeShell: View {
             let posture = DuoPosture.read(geo, duoEnvironment)
             let compact = widthClass == .compact || geo.size.width < 700
             ZStack {
+                // Porthole: Debug Recording's line for the shell's arrangement.
+                Color.clear.onChange(of: "\(compact ? "narrow" : "wide") \(Int(geo.size.width))×\(Int(geo.size.height))", initial: true) { _, line in
+                    PortholeDebugRecorder.shared.note("shell: " + line)
+                }
                 if compact {
                     compactBody
                 } else {
@@ -267,6 +271,7 @@ struct PortholeShell: View {
         #if DEBUG
         print("porthole: open \(p)")
         #endif
+        PortholeDebugRecorder.shared.note("open \(p)")
         pick = p
         compactPath = [p]   // the narrow layout's stack shows what was opened
         if case .session(let id) = p, let window = client.porthole.session(id)?.windowID {
@@ -593,6 +598,7 @@ struct PortholeSidebar: View {
     /// windows, kept outside this view and across launches, since the narrow layout builds the sidebar
     /// anew each time it comes back to it.
     @ObservedObject private var expansion = PortholeSidebarExpansion.shared
+    @ObservedObject private var recorder = PortholeDebugRecorder.shared
     private var expanded: Set<String> {
         get { expansion.apps }
         nonmutating set { expansion.apps = newValue }
@@ -646,6 +652,7 @@ struct PortholeSidebar: View {
                         favouritesSection
                         appsSection
                         proRow
+                        debugRow
                         proAndAnywhereRow
                         keysHint
                       }
@@ -849,6 +856,45 @@ struct PortholeSidebar: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain).foregroundStyle(PortholeStyle.text)
+    }
+
+    /// Porthole (31 Oct): Debug Recording, and while it records, its log to the clipboard (PortholeDebugRecorder).
+    private var debugRow: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            debugSwitch
+            if recorder.on { debugCopy }
+        }
+    }
+
+    private var debugSwitch: some View {
+        let on = recorder.on
+        let dot: Color = on ? .red : PortholeStyle.soft
+        let tick: Color = on ? PortholeStyle.green : PortholeStyle.muted
+        return Button { recorder.on.toggle() } label: {
+            HStack(spacing: 11) {
+                Image(systemName: "record.circle").font(PortholeType.ui(15)).frame(width: 24, height: 24).foregroundStyle(dot)
+                Text("Debug recording").font(PortholeType.ui(13.5))
+                Spacer()
+                Image(systemName: on ? "checkmark.circle.fill" : "circle").foregroundStyle(tick)
+            }
+            .foregroundStyle(PortholeStyle.soft)
+            .padding(.horizontal, 12).padding(.vertical, 7)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(on ? "Debug recording, on" : "Debug recording, off")
+    }
+
+    private var debugCopy: some View {
+        Button { recorder.copy() } label: {
+            Label("Copy debug log (\(recorder.count) lines)", systemImage: "doc.on.doc")
+                .font(PortholeType.ui(12.5))
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Palette.accent)
+        .padding(.leading, 35)
     }
 
     /// Porthole Pro's switches (PortholePro): the terminal theme; without Pro, a tap opens the Pro sheet.

@@ -327,6 +327,10 @@ struct StreamScreen: View {
             // The layouts and the overlays share this screen's space, and so its fold; the inner
             // display gives the picture the status bar's strip in every pose.
             .duoFold(posture, size: geo.size, screen: "stream screen")
+            // Porthole: Debug Recording's line for the arrangement, each time it changes.
+            .onChange(of: "\(duo) whole \(wholeScreen) \(Int(geo.size.width))×\(Int(geo.size.height)) hinge \(posture.hinge) \(layout)", initial: true) { _, line in
+                PortholeDebugRecorder.shared.note("stream screen: " + line)
+            }
             .duoStatusBar(posture, size: geo.size)
             .environment(\.largerPictureOffered, offersLarger)
             #if DEBUG
@@ -1122,6 +1126,8 @@ struct StreamScreen: View {
             .overlay(alignment: .top) { LinkLineView(text: shownLinkLine) }
             .clipShape(streamShape)
             .overlay(streamShape.strokeBorder(Color.white.opacity(0.09), lineWidth: 1))
+            // Porthole: on the Desktop, the keyboard's own button in the picture's corner, always there.
+            .overlay { if client.active == .desktop { DesktopKeyboardButton(shown: keyboardShown) { overlay.toggleKeyboard() } } }
             // The panel itself, inside the padding: the size the host fits the Mac window to.
             .onGeometryChange(for: CGSize.self, of: { $0.size }, action: { panelSize = $0 })
             .tourTarget(.stream)
@@ -1410,7 +1416,7 @@ struct BarButton<Content: View>: View {
     }
 
     var body: some View {
-        Button(action: action) {
+        Button(action: { PortholeDebugRecorder.shared.note("bar button: \(accessibilityLabel)"); action() }) {
             content()
                 .frame(width: width, height: height)
                 .background(RoundedRectangle(cornerRadius: radius, style: .continuous)
@@ -2166,5 +2172,61 @@ extension PhonePortraitLayout.Streaming {
         case .window: self = .window
         case .tiles: self = .desktop    // Porthole: tiles fill the panel like the Desktop
         }
+    }
+}
+
+/// Porthole (31 Oct, "in desktop mode i want a show/hide keyboard button … always shows in the bottom right
+/// hand corner"): over the Desktop's picture, in its bottom-right corner, lifted above the keyboard while
+/// that covers the corner (the stream runs on under it).
+private struct DesktopKeyboardButton: View {
+    let shown: Bool
+    let toggle: () -> Void
+    @ObservedObject private var keyboard = PortholeKeyboardFrame.shared
+
+    var body: some View {
+        GeometryReader { geo in
+            let frame = geo.frame(in: .global)
+            let lift = max(0, frame.maxY - keyboard.top)
+            Button(action: toggle) {
+                Image(systemName: shown ? "keyboard.chevron.compact.down" : "keyboard")
+                    .font(.system(size: 19, weight: .semibold))
+                    .frame(width: 48, height: 48)
+                    .background(.ultraThinMaterial, in: Circle())
+                    .overlay(Circle().strokeBorder(Color.white.opacity(0.18), lineWidth: 1))
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white)
+            .accessibilityLabel(shown ? "Hide the keyboard" : "Show the keyboard")
+            .position(x: geo.size.width - 38, y: max(38, geo.size.height - 38 - lift))
+            .animation(.easeOut(duration: 0.2), value: lift)
+        }
+    }
+}
+
+/// Where the on-screen keyboard's top edge is, in the window's space: `.infinity` while it is down.
+@MainActor final class PortholeKeyboardFrame: ObservableObject {
+    static let shared = PortholeKeyboardFrame()
+    @Published private(set) var top: CGFloat = .infinity
+
+    private init() {
+        let center = NotificationCenter.default
+        center.addObserver(forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: .main) { note in
+            let end = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
+            MainActor.assumeIsolated { PortholeKeyboardFrame.shared.moved(to: end) }
+        }
+        center.addObserver(forName: UIResponder.keyboardWillHideNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { PortholeKeyboardFrame.shared.top = .infinity }
+        }
+    }
+
+    private func moved(to end: CGRect?) {
+        guard let end, end.height > 0,
+              let window = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else {
+            top = .infinity; return
+        }
+        let inWindow = window.convert(end, from: window.screen.coordinateSpace)
+        // Off the bottom (hidden, or only the shortcut bar of a hardware keyboard below the window): none.
+        top = inWindow.minY >= window.bounds.maxY - 1 ? .infinity : inWindow.minY
     }
 }
