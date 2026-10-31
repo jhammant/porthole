@@ -213,16 +213,52 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         sendPointer(.leftUp, at: point, clamped: false)
     }
 
-    /// Long press: the right button, since there is no second finger to spare for it.
+    /// Long press: the right button, since there is no second finger to spare for it, on the lift. Porthole
+    /// (31 Oct, "There's no way to start the drag"): held and then moved, the finger drags with the left
+    /// button down instead (a window's edge, a file, a selection), let go where it ends. Moving starts the
+    /// drag from where the finger was held, so the Mac sees the press there first.
     @objc private func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
         guard !strokes.silent else { return }
-        guard gesture.state == .began else { return }
-        setOwnPointer(nil, .none)
         let point = gesture.location(in: self)
-        guard sendPointer(.move, at: point, clamped: false) != nil else { return }
-        sendPointer(.rightDown, at: point, clamped: false)
-        sendPointer(.rightUp, at: point, clamped: false)
+        switch gesture.state {
+        case .began:
+            setOwnPointer(nil, .none)
+            guard sendPointer(.move, at: point, clamped: false) != nil else { return }
+            pressStart = point
+            pressDragging = false
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        case .changed:
+            guard let start = pressStart else { return }
+            if !pressDragging {
+                guard hypot(point.x - start.x, point.y - start.y) > Self.dragSlop else { return }
+                pressDragging = true
+                sendPointer(.leftDown, at: start, clamped: false)
+            }
+            sendPointer(.move, at: point, clamped: true)
+        case .ended:
+            guard let start = pressStart else { return }
+            if pressDragging {
+                sendPointer(.leftUp, at: point, clamped: true)
+            } else {
+                sendPointer(.rightDown, at: start, clamped: false)
+                sendPointer(.rightUp, at: start, clamped: false)
+            }
+            pressStart = nil
+            pressDragging = false
+        case .cancelled, .failed:
+            if pressDragging { sendPointer(.leftUp, at: point, clamped: true) }
+            pressStart = nil
+            pressDragging = false
+        default:
+            break
+        }
     }
+
+    /// Porthole: where a held finger went down, while it is held; and whether it has moved off into a drag.
+    private var pressStart: CGPoint?
+    private var pressDragging = false
+    /// How far a held finger moves before it drags rather than right-clicks, in points.
+    static let dragSlop: CGFloat = 8
 
     /// Finger pan: scrolling, not dragging, shaped like a Mac trackpad gesture so the Mac
     /// rubber-bands at the edges and coasts after a flick:
@@ -376,6 +412,8 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     /// another's gesture is open, so the Mac never gets two gestures' phases interleaved. Nothing else
     /// changes for the finger pan: no other scroll was ever open before these.
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        // Porthole: a held finger drags (handleLongPress); it scrolls nothing meanwhile.
+        if gestureRecognizer === scrollPan, pressStart != nil { return false }
         if gestureRecognizer === scrollPan || gestureRecognizer === trackpadScroll || gestureRecognizer === wheelScroll {
             return !scrollGestureOpen
         }

@@ -106,7 +106,7 @@ struct PortholeShell: View {
             guard !empty, pick == .apps, let how = UserDefaults.standard.string(forKey: "PortholeOpen") else { return }
             // agent: the agent view; window:ID that window; desktop the Desktop (the store's screenshots).
             if how == "agent" { open(.agentView); return }
-            if how == "desktop" { client.select(.desktop); return }
+            if how == "desktop" { client.select(.desktop); open(.apps); return }
             if how.hasPrefix("window:"), let id = UInt32(how.dropFirst(7)) { client.show(window: id); return }
             // needs, first, or any other word: the first session whose folder or title has it.
             let named = client.porthole.sessions.first { $0.folder.localizedCaseInsensitiveContains(how) || $0.title.localizedCaseInsensitiveContains(how) }

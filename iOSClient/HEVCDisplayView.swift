@@ -82,6 +82,8 @@ final class HEVCDisplayView: UIView {
         super.didMoveToWindow()
         // A standalone layer renders at 1× unless told otherwise; the arrow should be crisp.
         if let scale = window?.screen.scale { cursorLayer.contentsScale = scale }
+        // Porthole: out of every window with a host still on screen, back into that host (StreamHostView).
+        if window == nil { DispatchQueue.main.async { [weak self] in if let self { StreamHostView.rehome(self) } } }
     }
 
     override func layoutSubviews() {
@@ -326,19 +328,67 @@ final class HEVCDisplayView: UIView {
     }
 }
 
+/// Porthole (31 Oct, "Rotating my duo stops the window showing … once it's in full mode"): each StreamView's
+/// own container for the client's one display view. SwiftUI may build the new layout's host before it
+/// dismantles the old one, so a new container takes the view from wherever it is. And a rotation's size
+/// can pass through the other arrangement and back within a frame (the Duo open flat: 653×767, 714×567,
+/// 653×767 in 60 ms): SwiftUI kept the first layout's host and tore down the passing one, which had the
+/// display view, and the stream went on decoding into a view in no window, behind a black panel. So a
+/// display view that leaves its window goes back into the newest container still in one.
+final class StreamHostView: UIView {
+    private static let hosts = NSHashTable<StreamHostView>.weakObjects()
+    private static var made = 0
+    private let display: HEVCDisplayView
+    private let serial: Int
+
+    init(display: HEVCDisplayView) {
+        self.display = display
+        Self.made += 1
+        serial = Self.made
+        super.init(frame: .zero)
+        backgroundColor = .black
+        Self.hosts.add(self)
+        adopt()
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func adopt() {
+        guard display.superview !== self else { return }
+        display.removeFromSuperview()
+        display.frame = bounds
+        display.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        addSubview(display)
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        if display.superview === self { display.frame = bounds }
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        // On screen while the display view is in no window: this container takes it.
+        if window != nil, display.window == nil { adopt() }
+    }
+
+    /// The display view is in no window: into the newest container that is in one.
+    static func rehome(_ display: HEVCDisplayView) {
+        guard display.window == nil else { return }
+        hosts.allObjects.filter { $0.window != nil && $0.display === display }.max { $0.serial < $1.serial }?.adopt()
+    }
+}
+
 struct StreamView: UIViewRepresentable {
     let client: StreamClient
 
-    /// Hosts the client's single display view. SwiftUI may build the new layout's host before it
-    /// dismantles the old one, so detach the view from wherever it was first.
-    func makeUIView(context: Context) -> HEVCDisplayView {
+    /// Hosts the client's single display view, in a container of its own (StreamHostView).
+    func makeUIView(context: Context) -> StreamHostView {
         let view = client.displayView
-        view.removeFromSuperview()
         #if DEBUG
         view.attachDiagnostics(to: client)
         #endif
         wirePointer(view)
-        return view
+        return StreamHostView(display: view)
     }
 
     /// Connects the client's pointer to the sprite, with no SwiftUI in between (a re-render per move
@@ -359,5 +409,5 @@ struct StreamView: UIViewRepresentable {
         client.renderPointer()
     }
 
-    func updateUIView(_ uiView: HEVCDisplayView, context: Context) {}
+    func updateUIView(_ uiView: StreamHostView, context: Context) {}
 }
