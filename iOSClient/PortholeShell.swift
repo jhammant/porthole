@@ -50,6 +50,14 @@ struct PortholeShell: View {
                 Color.clear.onChange(of: "\(compact ? "narrow" : "wide") \(Int(geo.size.width))×\(Int(geo.size.height))", initial: true) { _, line in
                     PortholeDebugRecorder.shared.note("shell: " + line)
                 }
+                // Porthole (1 Nov, "Portrait on the duo isn't right"): turned into the narrow layout with something
+                // on screen (a window picked from the strip or the drawer never touched the narrow layout's
+                // path), it opens on that, not on the sidebar; the sidebar is Back.
+                .onChange(of: compact) { _, narrow in
+                    guard narrow, compactPath.isEmpty, client.active != .none || pick != .apps else { return }
+                    compactPath = [pick]
+                    PortholeDebugRecorder.shared.note("shell: narrow with \(pick) on screen; opened it")
+                }
                 if compact {
                     compactBody
                 } else {
