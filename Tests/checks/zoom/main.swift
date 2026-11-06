@@ -50,5 +50,20 @@ let q = CGPoint(x: (300 - z.offset.width) / z.scale, y: (200 - z.offset.height) 
 check("a second pinch compounds and keeps its point", near(second.scale, 3)
       && near(CGPoint(x: q.x * second.scale + second.offset.width, y: q.y * second.scale + second.offset.height), CGPoint(x: 300, y: 200)))
 
+
+// Following the pointer to the edges (6 Nov): a 2× zoom showing the panel's top-left quarter.
+let quarter = PortholeZoom(scale: 2, offset: .zero)
+func drawnAt(_ z: PortholeZoom, _ p: CGPoint) -> CGPoint { CGPoint(x: p.x * z.scale + z.offset.width, y: p.y * z.scale + z.offset.height) }
+check("a pointer well inside moves nothing", quarter.following(CGPoint(x: 200, y: 150), in: panel, margin: 48) == quarter)
+let right = quarter.following(CGPoint(x: 490, y: 150), in: panel, margin: 48)
+check("at the right edge the view moves just enough to keep it 48 in", near(drawnAt(right, CGPoint(x: 490, y: 150)).x, 952) && near(right.offset.height, 0))
+let down = quarter.following(CGPoint(x: 200, y: 340), in: panel, margin: 48)
+check("at the bottom edge it moves down", near(drawnAt(down, CGPoint(x: 200, y: 340)).y, 652) && near(down.offset.width, 0))
+let farCorner = PortholeZoom(scale: 2, offset: CGSize(width: -1000, height: -700))
+check("never past the picture's own edge", farCorner.following(CGPoint(x: 999, y: 699), in: panel, margin: 48) == farCorner)
+let back = right.following(CGPoint(x: 10, y: 150), in: panel, margin: 48)
+check("back to the left edge it moves back, no further than the picture's edge", near(back.offset.width, 0))
+check("unzoomed nothing follows", PortholeZoom.none.following(CGPoint(x: 999, y: 699), in: panel, margin: 48) == .none)
+
 print(fails == 0 ? "all zoom checks passed" : "\(fails) zoom check(s) failed")
 exit(Int32(fails))

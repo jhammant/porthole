@@ -337,6 +337,9 @@ final class StreamClient: ObservableObject {
     /// Where the sprite's tip goes, a fraction of the video frame, or nil to hide it: the display
     /// view's `setPointer`, set by `StreamView.wirePointer`. Up to 120 times a second. Main thread.
     var onPointerChange: ((CGPoint?) -> Void)?
+    /// Porthole: the same position whenever the sprite shows, for the zoomed Desktop to follow
+    /// (StreamScreen's `followPointer`). Main thread.
+    var onPointerSeen: ((CGPoint) -> Void)?
     /// Q1's flip only (`PointerPresence.trackpadLinger`): the one timer that re-renders when the
     /// trackpad's pointer is due to go. Idle while the linger is nil, as it is by default.
     private var lingerRender: DispatchWorkItem?
@@ -3400,7 +3403,9 @@ final class StreamClient: ObservableObject {
     func renderPointer() {
         presence.follow(pointerFeed.current)
         let now = ProcessInfo.processInfo.systemUptime
-        onPointerChange?(presence.sprite(now: now))
+        let sprite = presence.sprite(now: now)
+        onPointerChange?(sprite)
+        if let sprite { onPointerSeen?(sprite) }
         // Q1's flip: one re-render when the trackpad's pointer is due to go. Never while the linger
         // is off (its end is then nil), and never again once that time has passed.
         lingerRender?.cancel()

@@ -143,6 +143,8 @@ struct StreamScreen: View {
     @State private var panelSize: CGSize = .zero
     /// Porthole: the Desktop's pinch zoom (PortholeZoom), back to none on any other source or panel size.
     @State private var desktopZoom: PortholeZoom = .none
+    /// Porthole: where the pointer was last seen, so only its moves move a zoomed Desktop (`followPointer`).
+    @State private var pointerMemo = PointerMemo()
     /// Porthole: the top bar hidden (Jon, 20 Oct: "be able to hide the top controls"); ⌃⌥B or its tab.
     @AppStorage(PortholeShell.topBarHiddenKey) private var topBarHidden = false
     /// Porthole: the Duo upright, half-folded and open flat: the laptop or the whole screen (PortholeDuoMode).
@@ -376,6 +378,8 @@ struct StreamScreen: View {
         }
         // Porthole: a new panel size (the top bar or sidebar hidden, a rotation) starts the zoom again.
         .onChange(of: panelSize) { _, _ in desktopZoom = .none }
+        // Porthole (6 Nov): a zoomed Desktop follows the pointer to its edges.
+        .onAppear { client.onPointerSeen = { p in followPointer(p) } }
         .onChange(of: client.active) { _, source in
             if source != .desktop { desktopZoom = .none }
             if source != .none { withAnimation(.easeOut(duration: 0.18)) { drawerOpen = false } }
@@ -1092,6 +1096,26 @@ struct StreamScreen: View {
     }
 
     private var streamShape: RoundedRectangle { RoundedRectangle(cornerRadius: 12, style: .continuous) }
+
+    /// Porthole (6 Nov, "when the full desktop is zoomed … scrolled around when I get to the edge of the
+    /// screen"): zoomed into the Desktop, the view moves with the pointer (the Mac's, or this device's own)
+    /// as it comes within `followMargin` of an edge (PortholeZoom.following). Only a move of the pointer
+    /// moves the view, so a two-finger pan away from a pointer standing still stays where it was put.
+    private func followPointer(_ p: CGPoint) {
+        let last = pointerMemo.last
+        pointerMemo.last = p
+        guard client.active == .desktop, desktopZoom.isZoomed, let last, last != p,
+              panelSize.width > 0, client.videoSize.width > 0 else { return }
+        let rect = HEVCDisplayView.videoRect(in: CGRect(origin: .zero, size: panelSize), videoSize: client.videoSize)
+        let point = CGPoint(x: rect.minX + p.x * rect.width, y: rect.minY + p.y * rect.height)
+        let next = desktopZoom.following(point, in: panelSize, margin: Self.followMargin)
+        if next != desktopZoom { desktopZoom = next }
+    }
+
+    static let followMargin: CGFloat = 48
+
+    /// The pointer's last position, kept without a redraw for each of its up to 120 moves a second.
+    final class PointerMemo { var last: CGPoint? }
 
     private func contentArea(bar: BarMetrics) -> some View {
         ZStack(alignment: .topLeading) {

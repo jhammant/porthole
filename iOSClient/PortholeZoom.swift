@@ -39,6 +39,20 @@ struct PortholeZoom: Equatable {
                                                         height: start.offset.height + translation.y)).clamped(to: bounds)
     }
 
+    /// Porthole (6 Nov, "when the full desktop is zoomed … scrolled around when I get to the edge"): the zoom
+    /// moved just enough that `point` (a point of the panel, unzoomed: where the Mac's pointer is) is drawn at
+    /// least `margin` inside the panel's edges, as the Mac's own zoom follows its pointer; never past the
+    /// picture's own edges. Unzoomed, or with the point already inside, the same zoom.
+    func following(_ point: CGPoint, in bounds: CGSize, margin: CGFloat) -> PortholeZoom {
+        guard isZoomed, bounds.width > 0, bounds.height > 0 else { return self }
+        let m = min(margin, bounds.width / 4, bounds.height / 4)
+        let drawn = CGPoint(x: point.x * scale + offset.width, y: point.y * scale + offset.height)
+        func push(_ v: CGFloat, _ size: CGFloat) -> CGFloat { v < m ? m - v : (v > size - m ? size - m - v : 0) }
+        let dx = push(drawn.x, bounds.width), dy = push(drawn.y, bounds.height)
+        guard dx != 0 || dy != 0 else { return self }
+        return PortholeZoom(scale: scale, offset: CGSize(width: offset.width + dx, height: offset.height + dy)).clamped(to: bounds)
+    }
+
     /// The same zoom with the picture covering the whole panel: no edge comes inside it. Back to none
     /// at 1×.
     func clamped(to bounds: CGSize) -> PortholeZoom {
